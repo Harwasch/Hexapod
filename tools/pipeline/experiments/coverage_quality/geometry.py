@@ -8,6 +8,17 @@ import numpy as np
 import numpy.typing as npt
 
 Array = npt.NDArray[Any]
+CONES = (10, 20, 25, 30, 45, 60)
+SHARPNESS = (0.5, 1, 2, 4)
+KERNELS = tuple((cone, sharp) for cone in CONES for sharp in SHARPNESS)
+
+
+def kernel_sum(row: dict[str, Any], cone: float, sharpness: float) -> float:
+    """Exact grid sufficient statistic; no angular rounding in compact derived CSVs."""
+    if "credit_sums" in row:
+        return float(row["credit_sums"][KERNELS.index((cone, sharpness))])
+    cosine = np.cos(np.radians(row["angles_deg"]))
+    return float(credit(cosine, cone, sharpness).sum())
 
 
 def unit(v: Array) -> Array:

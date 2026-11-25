@@ -1,23 +1,261 @@
-# Coverage hairs: what the available evidence can calibrate
+# Coverage hairs: measured held-out splat quality
 
-2026-11-25. Offline research against the supplied artifact snapshot; no network, GPU,
-Modal dispatch, production changes, or new training. The experiment is under
-[`experiments/coverage_quality`](../../tools/pipeline/experiments/coverage_quality/).
+2026-11-25 campaign, with completed GPU results supplied by the worker. Harrison
+approved the run and the **$5 cap through the coordinator**. The coordinator/worker
+dispatched Modal; this write-up used CPU only, no network and no Modal calls.
 
-**Finding:** angular diversity predicts our geometry gate better than repeated view
-count, but the available independent signals do **not** identify a hair credit curve
-or a views-to-fill threshold. Do not describe 14 hairs / 25° / 8 views as calibrated
-splat quality. The tool below makes the missing photometric experiment runnable.
+**Finding:** directional support predicts a small part of held-out rendering error,
+not a reliable probability that a trained splat is good. The best tested kernel is
+**10° cone, power 4**, with **four effective views for c935 and two for Beach**.
+Leave-test-view-out R² is **0.079 indoor** and **0.011 outdoor**. Both kernel
+parameters hit grid boundaries; transfer to Beach is **R² −0.016**. The data favor
+having a training bearing very close to the requested viewing direction, roughly
+within 5–10°, rather than the prototype's broad 25° cone. They do not validate one
+universal fill threshold, 14 directions, eight views per hair, or a “quality full”
+claim. The older high keep/drop AUCs mostly reproduce our own geometry rules.
 
-At 70° assumed FOV, c935's prototype hair score predicts majority-keep voxels with
-AUC **0.845**, versus **0.926** for angular spread, on 1,000 occupied voxels
-(167 majority-keep). That is a **circular outcome**. On the much smaller subset of
-confidence cells without geometry-failure reasons, hair AUC for _absence of an
-accuracy flag_ is **0.611** on Pumpkin (39 cells, 3 unflagged) and **0.208** on Spool
-(14 cells, 2 unflagged). Even these unflagged cells are not certified photometric
-passes: the public grid omits the held-out measurement denominator.
+## 1. Completed GPU experiment: the main evidence
 
-## 1. What our pipeline actually measures
+The target is measured photometric error on frames excluded from training:
+
+```text
+error = 0.8 × RGB L1 + 0.2 × (1 − SSIM)
+credit(t) = clamp((cos(t) − cos(cone)) / (1 − cos(cone)), 0, 1)^sharpness
+support = min(1, sum_training_views credit(t) / views_to_fill)
+predicted_error = scene_intercept + positive_slope × (1 − support)
+```
+
+Here `t` is the bearing angle between a test view and an observing **training**
+camera at the patch. “Fill” means equivalent perfectly aligned views, not any
+views inside the cone. Credit at 5° is about **0.316** and at 7° about **0.067**;
+half credit occurs near 4°. Thus four effective views can require ~13 frames at 5°.
+This is a continuous error regression, not an accuracy classifier or reliability
+calibration. No keep/context/drop labels enter these fits.
+
+### Models, split, and provenance
+
+| Scene                     | Training camera names | Test views | Patch/view rows |       Unique 3-D cells | Gaussians | Measured main wall time      |
+| ------------------------- | --------------------: | ---------: | --------------: | ---------------------: | --------: | ---------------------------- |
+| c935 indoor tabletop      |                   633 |         91 |           5,387 |                  4,382 | 5,626,152 | 5,226.97 s = 87.12 min, L40S |
+| Beach outdoor walk-around |                 1,818 |         38 |           1,310 |                  1,310 | 7,247,091 | 163.22 s, L4                 |
+| Pooled                    |                     — |        129 |           6,697 | 5,692, scene-qualified |         — | Local fit                    |
+
+c935 was freshly retrained with every eighth sorted frame withheld, starting at
+index zero: 633 train / 91 test from 724. The reduced pool uses `test_every=0`,
+so there is no second validation split. It used the pinned v17 60k-step MCMC
+schedule, SfM initialization, opacity regularization .002, cap 5,626,152, SH 3,
+native resolution, classic/packed rendering, and no pose/appearance optimization.
+The earlier public c935 job trained on all frames; its training PSNR was not used
+as independent validation. Poses still come from the original joint solve/ARKit
+source, so this is photometric holdout, not an independent pose reconstruction.
+
+Beach reuses trained run `4769ee65e33c44f2aacd87a45dfa3811`; no Beach retraining
+was charged. Its saved provenance lists **1,818 training names plus 38 test names**,
+not 1,818 total images. It used SH 3 and classic rendering, matching the model.
+Actual train/test names, hashes, renderer, code/image identity and scale evidence
+are preserved in the copied provenance, rather than inferred from frame counts.
+
+- **c935 scale:** 1.0 m/unit, `ARKit metric poses (job c9357a92 georeference
+scaleSource=arkit, scale 1.0)`. This names pipeline evidence, not a personal
+  verification by Harrison.
+- **Beach scale:** **2.232937 m/unit**, `camera-height estimate from production job
+4dd02171 georeference (unverified, not ARKit)`. `beach-full` was frozen from
+  `runs/4dd02171-341d-4970-bad2-8e410fb8d233`, capture `00113695`, also the capture
+  behind job `0bb8dd45`. **Physical patch sizes and mm/px remain scale-uncertain**.
+  The old scale-1 Beach rehearsal proves plumbing, not physical calibration.
+
+RGB, expected camera-z depth and alpha use the trainer-compatible gsplat settings.
+Test depth projects pixels onto nominal 0.1 m cells, with at most 64 patches per
+view. L1/SSIM use actual cell-member pixels; LPIPS uses a 32×32 neighborhood and
+can include adjacent surfaces. Normals come from test-depth gradients. Training
+visibility uses cached 160 px depth maps, alpha >.5 and tolerance max(5 cm, 1% depth).
+It is approximate on thin, transparent, occluded or layered surfaces. Only training
+cameras supply angles, counts, parallax and incidence-adjusted best mm/px.
+
+### Fitted prototype functions
+
+| Fit, combined error           | Cone | Sharpness | Views-to-fill | mm/px target | Parallax gate |      R² | LOVO R² |     LOSO R² on this scene |
+| ----------------------------- | ---: | --------: | ------------: | ------------ | ------------- | ------: | ------: | ------------------------: |
+| c935                          |  10° |         4 |             4 | Not retained | Not retained  | .083284 | .079246 | .049341, trained on Beach |
+| Beach                         |  10° |         4 |             2 | Not retained | Not retained  | .020475 | .011057 | −.015988, trained on c935 |
+| Pooled, scene intercepts only |  10° |         4 |             4 | Not retained | Not retained  | .074814 | .070501 |         .044163 aggregate |
+
+LOVO = leave one test view out. LOSO = leave one scene out, retuning all kernel
+parameters on the other scene, **without adapting the held scene's intercept**.
+The aggregate transfer score is row-weighted and dominated by c935; it does not
+rescue negative transfer to Beach. The pooled R² includes scene intercepts and
+must not all be attributed to geometry: the intercept-only baseline is **.002382**,
+versus .074814 with directional support, using the fitter's cell-balanced parameter
+weights and the same row-level R² definition.
+
+The original grid was cones 10/20/25/30/45/60°, powers .5/1/2/4, fills 1/2/4/8/16.
+Optional resolution targets 1/2/4/8 mm/px and parallax gates 10/15/20/30° were kept
+only for >.02 absolute LOVO R² gain. **Neither was retained**; this means no support
+under this grid/selection rule, not proof that resolution or triangulation is
+irrelevant. Hyperparameters were selected on the same LOVO folds reported, so
+these are exploratory, optimistically selected scores, not nested-CV estimates.
+Regression parameters give each spatial cell total weight one across repeated
+views; reported R²/LOVO scores use unweighted row errors. Curve means and the
+variance decomposition also use rows, not pixel weights.
+
+The fitted error models are:
+
+```text
+c935:  error_hat = .026168 + .044470 × (1 − support_fill4)
+Beach: error_hat = .048947 + .017530 × (1 − support_fill2)
+Pooled: intercept_Beach = .030687; intercept_c935 = .028822
+        error_hat = intercept_scene + .040035 × (1 − support_fill4)
+```
+
+The common narrow kernel transfers qualitatively, but fill 2 versus 4 and different
+error slopes/intercepts do not establish a shared quantitative function.
+Alternative targets also disagree:
+
+| Target | c935 fill / LOVO R² | Beach fill / LOVO R² | Pooled fill / LOVO R² | Aggregate LOSO R² |
+| ------ | ------------------- | -------------------- | --------------------- | ----------------: |
+| L1     | 4 / .060021         | 4 / .007342          | 4 / .052980           |           .033852 |
+| LPIPS  | 4 / .053532         | 16 / −.001854        | 4 / .046938           |          −.011140 |
+
+All those fits also chose cone 10° / power 4. Beach's perceptual fit does not beat
+its held-out-view mean baseline. Eight views per hair has no measured support here.
+
+### Near-angle curves and rank diagnostics
+
+Blue curves are patch-row means with **95% percentile bootstrap intervals from
+1,000 resamples of whole test views**, seed 2411. Bins are disjoint; counts and
+contributing views are in `diagnostics.json`. Orange curves are the original fitted
+model's conditional bin means, not causal one-feature effects. Intervals condition
+on these two trained scenes; neighboring test views remain temporally correlated,
+so they are not confidence intervals for new scans or environments.
+
+![Error versus nearest training bearing](coverage-quality/calibration/nearest-angle.png)
+
+On c935, mean error rises from **.0310 [.0281, .0341]** within 0–2° (2,380 rows /
+91 views) to **.0630 [.0553, .0704]** at 2–5° (438 / 89), and **.0785 [.0625, .0964]**
+at 7–10° (149 / 61). Beach is weaker: **.0505 [.0431, .0574]** at 0–2° (271 / 38),
+**.0564 [.0453, .0692]** at 2–5° (103 / 34), with overlapping, non-monotonic bins.
+This supports local view familiarity, most clearly indoors, not a sharp universal
+10° quality cutoff.
+
+The `none` category is separate from real angles: **1,554/5,387 c935 rows (28.8%)**
+and **581/1,310 Beach rows (44.4%)** have no training view passing the approximate
+depth test; nearest_deg=180 is a sentinel. Their mean errors are .0681 and .0670.
+They are not measured 180° bearings or proof of zero true visibility. Best mm/px
+is missing there, so partial-rank analyses below cover a selected observed subset.
+
+| Feature         | c935 Spearman | c935 within-view rank | c935 partial rank | Beach Spearman | Beach within-view rank | Beach partial rank |
+| --------------- | ------------: | --------------------: | ----------------: | -------------: | ---------------------: | -----------------: |
+| nearest_deg     |        +0.351 |                +0.394 |            +0.210 |         +0.137 |                 +0.174 |             +0.105 |
+| within10        |        -0.351 |                -0.402 |            -0.022 |         -0.139 |                 -0.154 |             -0.009 |
+| within20        |        -0.315 |                -0.378 |            -0.028 |         -0.125 |                 -0.136 |             -0.076 |
+| within30        |        -0.286 |                -0.356 |            +0.004 |         -0.091 |                 -0.101 |             +0.130 |
+| best_mm_px      |        -0.031 |                +0.054 |            +0.073 |         -0.060 |                 -0.022 |             +0.056 |
+| parallax_deg    |        -0.113 |                -0.186 |            +0.159 |         -0.067 |                 -0.097 |             +0.001 |
+| observing_views |        -0.199 |                -0.275 |            -0.011 |         -0.075 |                 -0.086 |             +0.070 |
+
+Partial ranks residualize feature/error ranks on **all other geometry ranks,
+pixel-count rank and test-view fixed effects** using within-view demeaning.
+Complete cases: **3,833 c935 / 729 Beach rows**; raw Spearman is pairwise-complete
+(5,387/1,310 except mm/px). Counts are strongly related, so partial signs are
+conditional associations, not feature importance or causal effects. Nearest-angle
+Spearman on observing-only rows is **.432 c935 / .106 Beach**.
+
+![Counts within 10/20/30 degrees and all observing views](coverage-quality/calibration/view-counts.png)
+
+![Footprint and parallax associations](coverage-quality/calibration/resolution-parallax.png)
+
+![Raw, within-view and partial rank associations](coverage-quality/calibration/rank-correlations.png)
+
+The weak/inconsistent mm/px and parallax associations do not justify fitted hair
+multipliers. Incidence, depth-based visibility, correlated camera paths and uncertain
+Beach scale limit interpretation. Physics-based acquisition advice can remain
+separate from this weak rendering-error predictor.
+
+### Why the R² is low, and what noise ceiling is measurable
+
+| Diagnostic                                                        |            c935 |           Beach |
+| ----------------------------------------------------------------- | --------------: | --------------: |
+| Between-test-view share of error sum of squares                   |          10.25% |          12.49% |
+| Within-test-view share                                            |          89.75% |          87.51% |
+| Mean / median error                                               | .05349 / .02595 | .06187 / .04638 |
+| Highest-error 1% of rows: share of squared deviation              |          27.95% |          15.34% |
+| Repeated 10 cm cells / rows in those cells                        |     797 / 1,802 |           0 / 0 |
+| Raw repeated-cell split-half Pearson, median over 200 allocations |            .399 |   Not estimable |
+| Same, after removing test-view means                              |            .362 |   Not estimable |
+| Exchangeable-repeat ICC: raw / view-demeaned                      |     .363 / .328 |   Not estimable |
+
+The variance split is an exact descriptive ANOVA over **unweighted row errors**.
+Most variation is local within a view, and large-error tails strongly affect squared
+loss; a moderate rank trend need not give a large R². Texture, view-dependent color,
+pose/registration error, disocclusion, blur/exposure and imperfect depth attribution
+are plausible contributors, but their variance shares were not measured. The
+unexplained 92–99% is **not** an estimate of pure noise.
+
+![Variance decomposition and repeated-cell consistency](coverage-quality/calibration/variance-repeats.png)
+
+For c935, split each repeated cell's observations randomly between two halves and
+correlate cell-mean errors. The 2.5–97.5% **allocation ranges**, not population CIs,
+are .382–.413 raw and .343–.379 after view demeaning. An unbalanced one-way random
+intercept calculation gives ICC .363/.328. **If** different-view measurements were
+exchangeable noisy replicas of one fixed cell error, those ICCs would suggest an
+approximate .36/.33 single-row ceiling for a cell-stable predictor on this repeated
+subset. That assumption is unverified: view direction changes the target itself,
+and depth-projected grid cells can mix different surfaces. This is repeat-cell
+consistency, not an identified photometric-noise ceiling. Beach has no repeats.
+There are no repeated renders/photos at fixed patch **and view**, nor per-patch
+pixel error variances, so a defensible pure-noise ceiling remains unmeasured.
+
+### Boundary extension: blocked by the saved angle export
+
+The requested CPU extension is cones **3/5/7/10°**, powers **4/8/16**. The analysis
+implements and tests exact refitting when raw angles are present. In these actual
+CSVs, **every `angles_deg` list is empty**, despite positive observing-view counts.
+The exporter retained exact sums for the original 24 kernels plus six cone counts,
+then discarded raw angles. These sufficient statistics reproduce the original grid
+fits, which the analysis verifies, but do not identify smaller cones or higher
+moments. Squaring a sum of fourth-power credits does not yield a sum of eighth powers.
+Nearest angle alone cannot reconstruct all observing directions. Therefore we
+**cannot tell whether the optimum continues beyond the boundary from these files**;
+no surrogate extension is reported as a refit.
+
+## 2. Phone recommendation and the next calibration step
+
+1. **Use the narrow signal provisionally:** `cone=10°`, `sharpness=4`, `fill=4`
+   effective training-eligible views, as directional support rather than predicted
+   correctness. Beach's fill=2 is evidence against universal fill, not a reason to
+   announce two frames sufficient. Match the eventual training keyframe sampler;
+   counting 60 Hz preview frames would change the denominator and invalidate fill.
+2. **Increase internal angular resolution; keep the UI sparse.** A 14-direction
+   hemisphere with 10° caps covers only **20.5%** of 10,000 equal-area probe bearings.
+   A provisional **128 normal-relative bins** covers 99.63% (sampled worst gap 11.74°);
+   256 covers all probes (worst gap 7.60°). These are discretization calculations,
+   not fitted quality-optimal hair counts or rigorous covering bounds. Start with
+   128 internal targets and sparse displayed sector summaries; test 256 and horizon
+   padding for missed directions and steep-kernel interpolation bias. Fourteen
+   independent 10° hairs cannot represent hemisphere coverage.
+3. **Use visibility and stable local normals.** Keep direction state normal-relative;
+   lock or rebin when normals change. Update only visible cells and usable keyframes.
+   128 half-precision capped accumulators cost 256 bytes/cell, ~2.56 MB per 10,000
+   cells, plus metadata; dot products can be vectorized. This is a budget estimate,
+   not an iPhone performance measurement. No iOS/app code is changed here.
+4. **Drop fitted distance/footprint weighting and the parallax multiplier for now.**
+   Neither passed the predeclared LOVO gain rule. Keep distance, baseline and weak
+   tracking as separate acquisition guidance; the gate's geometry requirements and
+   physical triangulation remain relevant to shape, which this loss does not measure.
+5. **Recalibrate across scans.** Retain per-patch raw angles/observing-view IDs and
+   sampling policy; rerun evaluation of retained models to extend the boundary grid
+   without retraining them. Then add multiple indoor/outdoor scans, fit on scans
+   rather than neighboring views, hold whole scans out, and compare the logged live
+   cell state to trained held-out residuals. Train nested view subsets of the same
+   scans to identify count saturation causally. Survey Beach scale; measure actual
+   geometric fidelity and fixed-patch/fixed-view repeat noise before a quality claim.
+
+One function does **not** yet hold quantitatively across indoor tabletop and outdoor
+walk-around: the shared narrow kernel is a hypothesis, while fill, error amplitude,
+perceptual behavior and transfer differ. Do not derive a probability of correctness
+from hair fullness, or silently replace the production gate with these parameters.
+
+## 3. Pipeline ground truth and the geometry gate
 
 These references describe today's source. Public job counters identify historical
 versions, but missing private support columns prevent independently replaying each
@@ -71,7 +309,85 @@ appearance and geometry separately, not evidence for 8 views, 25° cones, or 45�
 No recorded origin for the prototype's 14 directions, 25° cone or sharpness was found
 in those records. Eight total support views in the gate is **not** eight views per hair.
 
-## 2. Physics and literature: hypotheses to measure
+## 4. Combining the original no-GPU observations
+
+The original sampled-public-artifact analysis remains reproducible by `observe.py`;
+its numerical tables and proxy associations are in
+[summary.json](coverage-quality/summary.json). It assumed cameras pointed at the ROI
+centre, circular 70° FOV, no occlusion, nominal focal/scale, and local PCA normals.
+It sampled at most 1,000 occupied 0.1-unit voxels per job from decimated centres.
+These assumptions are weaker than the actual training-camera/depth visibility used
+by the completed GPU experiment. The two c935 models/populations are also different:
+old public all-frame training versus the fresh held-out retrain.
+
+V = assumed observing views; S = maximum pairwise spread; D = greedy distinct bearings
+≥15°; F = log determinant of a bearing-information proxy; H = the original 14 hairs,
+25° cone, power 1 (the prototype supplied no power), fill 8, mean fullness; HR/FR add
+hypothesized footprint weights. These parameters were not a replay of iOS code. In particular,
+`F = logdet(I + Σ (I − u uᵀ)/r²)`. HR uses capped squared weighting toward
+2 nominal mm/px; FR replaces inverse-range weighting with that footprint weight.
+Their priors/units are hypotheses, not fitted camera resolution.
+
+### Majority-keep AUC: circular
+
+Higher scores predict keep. NA means only one class in the sampled voxel population;
+we do not manufacture a rare-positive AUC or treat NA as 0.5.
+
+| Job (n / keep)        |    V |    S |    D |    F |    H |   HR |   FR |
+| --------------------- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0bb8 (1,000 / 396)    | .782 | .883 | .844 | .892 | .799 | .833 | .845 |
+| Pumpkin (1,000 / 175) | .983 | .984 | .994 | .995 | .960 | .950 | .952 |
+| 8b74 (1,000 / 893)    | .816 | .798 | .814 | .806 | .787 | .808 | .815 |
+| a626 (43 / 0)         |   NA |   NA |   NA |   NA |   NA |   NA |   NA |
+| c935 (1,000 / 167)    | .834 | .926 | .901 | .915 | .845 | .864 | .876 |
+| d535 (1,000 / 0)      |   NA |   NA |   NA |   NA |   NA |   NA |   NA |
+| Spool (1,000 / 156)   | .988 | .990 | .992 | .992 | .968 | .962 | .969 |
+
+Across the five defined jobs, mean AUC S=.916 (range .798–.990), F=.920
+(.806–.995), H=.872 (.787–.968), HR=.883 (.808–.962). These **per-job spreads**
+are the uncertainty description, not iid Gaussian bootstrap confidence intervals.
+Nearby cells and the same camera path are strongly dependent; seven jobs, only two
+with validation, cannot establish generalization intervals.
+
+![Circular tier AUC](coverage-quality/tier_keep_circular.png)
+
+**Leave one job out:** fit a standardized linear probability model on the other six
+jobs, with scaling learned only there. Held-job combined V/S/D/F/H/HR/FR AUC:
+0bb8 **.881**, Pumpkin **.988**, 8b74 **.813**, c935 **.922**, Spool **.991**;
+a626/d535 NA. Individual-feature LOJO results are also in `summary.json` (their
+learned slopes retain the same sign, so their AUCs equal the fixed-score table).
+No hyperparameter search on the held job. This tests transfer of our **gate proxy**,
+not error prediction. There are too few measured positive/negative accuracy cells
+to claim a credible independent LOJO calibration.
+
+The structural share of tier labels unchanged by held-out demotion is **100%** on
+all five all-frame jobs, **98.170% Pumpkin**, and **99.437% Spool**. These are counts
+from the demotion-only code path, not a decomposition of AUC into circular and
+independent portions. Missing private support columns prevent an exact rule replay.
+Geometry/opacity/ROI rules determine every other tier by construction. The new GPU
+regressions measure a separate outcome, held-out photometric error, so their low
+R² does not contradict high AUC for the rule-defined keep label.
+
+The public accuracy bit is a selected independent signal: only geometry-keep can be
+demoted, and absence can mean unmeasured rather than good. After excluding cells
+with view/spread/GSD failure bits, H AUC for absence of an accuracy bit was **.611**
+on Pumpkin (**39 cells, 3 unflagged**) versus **.208** on Spool (**14, 2**).
+Unconditioned H AUC was inverted (.025/.015), reflecting selection. There is no
+reliable independent calibration in those small public subsets.
+
+Opacity and log-anisotropy rank correlations were weak/inconsistent (c935 H:
+−.051 and −.012, n=1,000 published Gaussians). Published populations are gated,
+quantized and sometimes fallback-published, so these are imperfect selected proxies.
+Surface-cell H AUC was .617 on c935 (717 cells / 510 surfaced); surface combines
+SfM/published-alpha samples rather than surveyed geometry. FOV sensitivity alone
+moved c935 H tier AUC from .795 at 50° to .878 at 90°. Neither those proxies nor
+the circular AUCs justify 25° / eight views as trained-render quality.
+
+The private Beach run was not identified in the supplied public API snapshot. The
+worker later supplied its bench provenance and link through capture 00113695 to
+0bb8dd45; that relationship does not make the two trained models interchangeable.
+
+## 5. Physics and literature: context, not fitted constants
 
 The references below are recalled from prior knowledge. **No links or bibliographic
 details were checked online**, as requested. FisherRF/ActiveNeRF/FSGS identifiers
@@ -120,503 +436,142 @@ SH should be evaluated separately. Specularity, motion, blur and exposure change
 can create view-dependent residuals unrelated to geometric coverage. Occluded or
 back-facing surfaces should receive no credit even when the camera is close.
 
-Candidate per-surfel support, for hair h and observed view v:
+## 6. Reproduction, artifacts, and remaining unknowns
 
-```text
-u_v = normalize(camera_v − surface_point)
-a_vh = clamp((u_v·h − cos(cone))/(1 − cos(cone)), 0, 1)^sharpness
-q_v  = min(1, (target_mm_px / mm_px_v)^2)       # a hypothesis, not a measured exponent
-H_h  = min(1, sum_v visible_v × usable_v × a_vh × q_v / views_to_fill)
-P    = min(1, max_parallax / parallax_gate)     # optional soft gate to fit
-```
-
-Keep directional hairs separate: their mean loses which side is missing. Smallest
-eigenvalue or condition of `Σ(I−u uᵀ)/r²` can warn about depth degeneracy; the log
-determinant can still look high after hundreds of almost identical bearings because
-it gains information in two axes. Neither score alone measures a trained splat.
-
-## 3. Observational experiment
-
-Reproduce the numerical tables and three small PNGs from the worktree root:
+From this worktree root, reproduce all new diagnostics, five PNGs, copied fit/
+provenance files and the permitted small table with one analysis invocation:
 
 ```bash
 mkdir -p .tmp
 TMPDIR="$PWD/.tmp" MPLCONFIGDIR="$PWD/.tmp/mpl" \
 OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4 \
 /home/harrison/hw-py/bin/python -I \
+  tools/pipeline/experiments/coverage_quality/analyze_calibration.py \
+  --results-root /home/harrison/.local/share/hexapod-bench/coverage-quality-20261125-v2 \
+  --out docs/research/coverage-quality/calibration
+# Delete .tmp after running analysis/checks.
+```
+
+The script only parses derived CSV/JSON data. It replays the saved-grid combined
+error fit for each scene and checks the reported R²/LOVO values, computes the new
+curves/ranks/variance/repeat diagnostics, and attempts the extended grid only if
+complete raw angles exist. No downloaded code, network client, Modal, torch or GPU
+is used. Numerical helpers/tests need NumPy only; plotting uses hw-py's Matplotlib.
+The five PNGs are each <300 KB. JSON outputs are deterministic with seed 2411.
+
+Files in [calibration/](coverage-quality/calibration/):
+
+- [diagnostics.json](coverage-quality/calibration/diagnostics.json): all binned
+  means/CIs/sample sizes, raw and partial ranks, variance/repeat diagnostics,
+  boundary-extension status, input table hashes and direction-discretization probe.
+- [c935-fit.json](coverage-quality/calibration/c935-fit.json),
+  [Beach fit](coverage-quality/calibration/beach-fit.json),
+  [pooled fit](coverage-quality/calibration/pooled-fit.json): exact worker outputs,
+  including all three target metrics and transfer scores.
+- [c935 provenance](coverage-quality/calibration/c935-provenance.json),
+  [Beach provenance](coverage-quality/calibration/beach-provenance.json),
+  [pooled provenance](coverage-quality/calibration/pooled-provenance.json): exact
+  worker outputs. These identify completed splits, hashes, scale and scene evidence.
+- [Beach patches](coverage-quality/calibration/beach-patches.csv): 600,051 bytes,
+  below 1 MB. c935 CSV is 2,946,695 bytes; deterministic gzip is **1,191,467 bytes**,
+  also above 1 MB, so neither is copied. Its read-only source remains
+  `/home/harrison/.local/share/hexapod-bench/coverage-quality-20261125-v2/main-c935/patches.csv`.
+  The reproduction command requires that source; the report does not pretend the
+  compact checked-in summaries can reconstruct every source row.
+
+The older observational analysis is independently reproducible, from the original
+read-only snapshot, with:
+
+```bash
+TMPDIR="$PWD/.tmp" MPLCONFIGDIR="$PWD/.tmp/mpl" \
+OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4 \
+/home/harrison/hw-py/bin/python -I \
   tools/pipeline/experiments/coverage_quality/observe.py \
   --data-root /home/harrison/.cache/hex-coverage-research \
   --out docs/research/coverage-quality
-# Delete .tmp after the run.
 ```
 
-The input directory is only parsed. No downloaded code is imported or executed.
-`summary.json` is the single summary table, including all FOV variants and LOJO
-results. Fixed seed 2411, at most 1,000 samples per population, one GLB decoded at a
-time; four compute threads. The final run took **63.83 s**, peaking at **183.0 MiB RSS**, including plots.
-Runtime/peak RSS are recorded in that summary. Figures
-are diagnostics, not additional data tables.
-
-**Populations and visibility assumptions.** Read every tier-3 camera in capture
-order. Use the median of **all** sampled Gaussian centres as an assumed pointing
-centre (no tier labels used to aim cameras). Assume circular 70° total FOV, repeat
-at 50° and 90°, no occlusion, no lens distortion, no back-face rejection. Estimate
-focal from normalized image width and 70°; use width 1080 when unavailable. This
-cannot reproduce real visibility. Changing FOV retains that nominal focal to isolate
-visibility sensitivity. Camera poses/orientations and actual focal lengths are absent.
-For Pumpkin/Spool, these camera sets include validation cameras: the artifact has no
-image names to identify the sorted train split. Thus even their geometry predictors
-have train/test leakage and are observational proxies only.
-
-Bin the 150k-ish sampled centres into 0.1-unit 3-D voxels; sample occupied voxels
-uniformly and use one centre per voxel for geometry, majority sample tier for the
-label (ties count as keep). Sparse background voxels often have only one sampled
-Gaussian; these are **not full-density voxel tiers**. PCA normal: 16 nearest sample
-centres, face toward mean camera centre. At corners/foliage these are not reliable
-surfel normals. Distances use published ENU units: **0.1 units is nominally 10 cm**;
-several old records say scale unresolved. Their mm/px below is a nominal sensitivity
-feature, not a measured physical resolution. c935 has ARKit scale evidence even
-though the generic quality summary still reports GSD metric=false.
-
-Use native confidence cells (0.25 m, Spool 0.5 m), with one geometry calculation per
-cell, to avoid treating duplicated flags as independent Gaussians. Match sample
-height by nearest centre in plan within one cell diagonal; report retained cells.
-Sample cells before this height match, which can drop flagged cells. Surface outcome
-is DSM present among cells with sample-source bits; absent includes thin and
-out-of-range cells. Do not infer exact sample count from the logarithmic nibble.
-Published shape/alpha outcomes sample uniformly over leaf Gaussian rows using random
-priorities across **all** leaves; parents are excluded to avoid LOD duplication.
-
-### Circularity quantified
-
-| Job              | Training / validation frames | Trained Gaussians | Reported keepPct | Fraction of final tier unchanged by held-out error |
-| ---------------- | ---------------------------: | ----------------: | ---------------: | -------------------------------------------------: |
-| c9357a92         |                      724 / 0 |         5,626,152 |            59.7% |                                               100% |
-| d535bf21         |                    1,060 / 0 |         3,760,398 |             0.5% |                                               100% |
-| a6261a0c         |                      249 / 0 |           200,000 |             0.0% |                                               100% |
-| 8b74e626         |                      137 / 0 |           200,000 |            94.6% |                                               100% |
-| 0bb8dd45         |                    2,037 / 0 |        14,015,281 |            48.6% |                                               100% |
-| 71556411 Pumpkin |                       49 / 7 |           711,907 |            69.1% |                                            98.170% |
-| ec644db5 Spool   |                     156 / 23 |         1,388,939 |            69.2% |                                            99.437% |
-
-The last column is the **structural fraction** `(total−demotedByHeldOut)/total`,
-from job counters and the demotion-only code path; not a replay with missing inputs,
-and not an estimate of “what fraction of AUC is circular.” That AUC decomposition
-is not identifiable here. Pumpkin demotes 13,030/552,245 geometry-keep (2.359%);
-Spool 7,815/986,270 (0.792%). Those cases alone add independent photometric evidence
-to the tier. Geometry plus opacity/ROI rules explains every other tier by construction.
-Accuracy attribution is independent of the geometry thresholds, but the **population
-eligible to receive that label is selected by geometry**.
-
-The premise “published means keep + context” also has exceptions: c935, d535 and
-most other runs applied **strict**, publishing keep only. a626 applied **everything**
-after the minimum-count fallback (1 keep, 2 context, 199,997 drop). Its 1,000 published
-shape samples are therefore mostly dropped training Gaussians, not successful survivors.
-50c25673 is ingest without cameras; 9e62fd60 lacks coverage/support. Both excluded.
-No supplied API job/site record identifies a run as **beach**. 0bb8dd45 is included
-as the Nov-03 capture, without assuming that missing identity.
-
-### Candidate functions and geometry
-
-Column abbreviations in every table:
-
-- **V:** number of assumed observing views. **S:** exact maximum pairwise angular spread.
-- **D:** greedy count of directions ≥15° apart, in capture order (not the optimal packing).
-- **F:** `logdet(I + Σ(I−u uᵀ)/r²)`, a bearing-information proxy with identity prior.
-- **H:** 14 equal-area Fibonacci directions on the PCA-normal hemisphere; 25° cone,
-  sharpness **1** (the brief did not supply a sharpness value), sum credits, saturate
-  at 8 per hair, average hairs. This instantiates the brief, not an exact iOS replay.
-- **HR:** H with per-view `min(1,(2 nominal mm/px / footprint)^2)` credit weight.
-- **FR:** `logdet(I + Σq(I−u uᵀ))`; footprint weighting replaces inverse-square range.
-
-Absolute F's prior/scale and HR/FR's 2 mm target are hypotheses. They cannot be
-transferred between unresolved-scale scenes as calibrated scores.
-
-| Job     | Sample centres / cameras | Occupied sample voxels | Evaluated / majority-keep | Median V / S° / D | Min / median range† | Incidence cosine / best nominal mm/px |
-| ------- | -----------------------: | ---------------------: | ------------------------: | ----------------- | ------------------- | ------------------------------------- |
-| 0bb8    |          147,963 / 2,037 |                 67,363 |               1,000 / 396 | 722 / 30.18 / 2   | 14.10 / 18.42       | .31 / 36.11                           |
-| Pumpkin |             149,944 / 56 |                  4,971 |               1,000 / 175 | 16 / 32.11 / 3    | 3.00 / 3.29         | .52 / 7.13                            |
-| 8b74    |            149,863 / 137 |                  2,829 |               1,000 / 893 | 95 / 139.44 / 18  | 1.41 / 3.01         | .35 / 4.51                            |
-| a626    |             64,716 / 249 |                     43 |                    43 / 0 | 249 / 1.70 / 1    | .40 / .41           | .80 / .65                             |
-| c935    |            149,276 / 724 |                 14,631 |               1,000 / 167 | 162 / 17.94 / 2   | 3.19 / 3.47         | .50 / 6.91                            |
-| d535    |          148,940 / 1,060 |                  1,795 |                 1,000 / 0 | 913 / 4.38 / 1    | 1.69 / 1.73         | .82 / 2.90                            |
-| Spool   |            149,821 / 179 |                 19,002 |               1,000 / 156 | 63 / 21.73 / 2    | 6.49 / 6.92         | .39 / 11.60                           |
-
-† Medians over points of their minimum and median ranges, in nominal ENU metres.
-Median Fibonacci-hemisphere hit fraction at 25°: 0.143 for 0bb8/Pumpkin/c935/Spool,
-0.429 for 8b74, 0.071 for a626/d535. Thousands of near-duplicate frames can fill one
-hair while leaving the rest empty. These are measured under the stated assumptions,
-not a reconstruction of the catalog's medianViews.
-
-### AUC for majority-keep: circular
-
-Higher scores predict keep. NA means only one class in the sampled voxel population;
-we do not manufacture a rare-positive AUC or treat NA as 0.5.
-
-| Job (n / keep)        |    V |    S |    D |    F |    H |   HR |   FR |
-| --------------------- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 0bb8 (1,000 / 396)    | .782 | .883 | .844 | .892 | .799 | .833 | .845 |
-| Pumpkin (1,000 / 175) | .983 | .984 | .994 | .995 | .960 | .950 | .952 |
-| 8b74 (1,000 / 893)    | .816 | .798 | .814 | .806 | .787 | .808 | .815 |
-| a626 (43 / 0)         |   NA |   NA |   NA |   NA |   NA |   NA |   NA |
-| c935 (1,000 / 167)    | .834 | .926 | .901 | .915 | .845 | .864 | .876 |
-| d535 (1,000 / 0)      |   NA |   NA |   NA |   NA |   NA |   NA |   NA |
-| Spool (1,000 / 156)   | .988 | .990 | .992 | .992 | .968 | .962 | .969 |
-
-Across the five defined jobs, mean AUC S=.916 (range .798–.990), F=.920
-(.806–.995), H=.872 (.787–.968), HR=.883 (.808–.962). These **per-job spreads**
-are the uncertainty description, not iid Gaussian bootstrap confidence intervals.
-Nearby cells and the same camera path are strongly dependent; seven jobs, only two
-with validation, cannot establish generalization intervals.
-
-![Circular tier AUC](coverage-quality/tier_keep_circular.png)
-
-**Leave one job out:** fit a standardized linear probability model on the other six
-jobs, with scaling learned only there. Held-job combined V/S/D/F/H/HR/FR AUC:
-0bb8 **.881**, Pumpkin **.988**, 8b74 **.813**, c935 **.922**, Spool **.991**;
-a626/d535 NA. Individual-feature LOJO results are also in `summary.json` (their
-learned slopes retain the same sign, so their AUCs equal the fixed-score table).
-No hyperparameter search on the held job. This tests transfer of our **gate proxy**,
-not error prediction. There are too few measured positive/negative accuracy cells
-to claim a credible independent LOJO calibration.
-
-### Accuracy flags: independent residual, selected and incomplete labels
-
-Native confidence grids contain 36 accuracy-flagged Pumpkin cells and 20 Spool
-cells. Height matching after the bounded sample retains 557/36 and 925/12
-cells/flags respectively. Zero flags on the five all-frame runs means **not measured**.
-The grid sets an accuracy reason only when a majority of non-keep alpha is demoted;
-an unflagged cell can be unmeasured, coverage-rejected, or a mixture of failures.
-
-AUC predicting **absence** of that flag, without conditioning:
-
-| Job (cells / unflagged) |    V |    S |    D |    F |    H |   HR |   FR |
-| ----------------------- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Pumpkin (557 / 521)     | .015 | .022 | .016 | .016 | .025 | .028 | .028 |
-| Spool (925 / 913)       | .004 | .004 | .003 | .004 | .015 | .009 | .007 |
-
-These striking inversions are **selection effects**, not evidence that taking more
-views harms quality: only geometry-keep can be demoted, so the central well-observed
-cells can carry accuracy flags while the unmeasured fringe cannot.
-
-Restrict to scored cells with **none of reason bits 1/2/4** (still not a verified-pass
-mask; several failures can each be below a cell's majority threshold):
-
-| Job (cells / unflagged) |    V |    S |    D |    F |    H |   HR |   FR |
-| ----------------------- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Pumpkin (39 / 3)        | .542 | .667 | .634 | .667 | .611 | .657 | .611 |
-| Spool (14 / 2)          | .312 | .333 | .250 | .292 | .208 | .333 | .250 |
-
-Directions disagree between jobs and the effective denominator is tiny. No
-photometric calibration, learned hair parameters, or causal claim follows.
-
-![Selected accuracy-flag association](coverage-quality/accuracy_flag_absent.png)
-
-### Shape and surface proxies
-
-Spearman rho with **published alpha**, 1,000 leaf Gaussians per job:
-
-| Job     |     V |     S |     D |     F |     H |    HR |    FR |
-| ------- | ----: | ----: | ----: | ----: | ----: | ----: | ----: |
-| 0bb8    | −.083 | −.137 | −.068 | −.068 | −.077 | −.094 | −.092 |
-| Pumpkin | −.014 | −.175 | −.155 | −.163 | −.014 | −.020 | −.027 |
-| 8b74    | −.133 | −.144 | −.142 | −.176 | −.117 | −.152 | −.157 |
-| a626    |  .064 |  .130 |  .093 |  .118 |  .038 |  .040 |  .100 |
-| c935    | −.047 | −.044 | −.037 | −.032 | −.051 | −.059 | −.048 |
-| d535    | −.131 | −.149 | −.217 | −.052 | −.027 | −.027 | −.155 |
-| Spool   | −.001 |  .065 |  .068 |  .060 |  .020 | −.031 | −.019 |
-
-Spearman rho with **log(max scale/min scale)**, same samples:
-
-| Job     |     V |     S |     D |     F |     H |    HR |    FR |
-| ------- | ----: | ----: | ----: | ----: | ----: | ----: | ----: |
-| 0bb8    | −.021 | −.003 | −.054 | −.036 | −.046 | −.025 | −.030 |
-| Pumpkin |  .105 | −.031 |  .029 | −.028 | −.024 | −.069 | −.061 |
-| 8b74    |  .080 |  .100 |  .083 |  .109 |  .067 |  .050 |  .053 |
-| a626    |  .034 | −.179 |  .039 | −.206 |  .015 |  .012 | −.191 |
-| c935    | −.019 | −.168 | −.050 | −.074 | −.012 | −.021 | −.030 |
-| d535    |  .057 |  .015 | −.036 | −.071 |  .118 |  .118 |  .023 |
-| Spool   |  .042 |  .108 |  .033 |  .018 | −.049 | −.072 | −.075 |
-
-These weak, inconsistent associations do not validate a hair function. Gating
-truncates the population, SPZ quantizes opacity/log-scales, and true planar surfaces
-are anisotropic. Strict publication can hide exactly the malformed Gaussians of
-interest; a626's fallback is a separate population. These are not circular tier
-labels, but they are **selected, imperfect outcomes**, not ground-truth error.
-
-![Published anisotropy associations](coverage-quality/published_log_anisotropy.png)
-
-AUC for **surface present**, native cells with sample-source bits:
-
-| Job (n / surfaced)  |    V |    S |    D |    F |    H |   HR |   FR |
-| ------------------- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 0bb8 (928 / 508)    | .717 | .842 | .808 | .865 | .742 | .786 | .807 |
-| Pumpkin (424 / 361) | .794 | .793 | .753 | .838 | .775 | .778 | .770 |
-| 8b74 (184 / 180)    | .803 | .879 | .854 | .881 | .782 | .810 | .804 |
-| a626 (4 / 4)        |   NA |   NA |   NA |   NA |   NA |   NA |   NA |
-| c935 (717 / 510)    | .693 | .748 | .652 | .762 | .617 | .665 | .687 |
-| d535 (66 / 44)      | .439 | .805 | .511 | .838 | .458 | .488 | .645 |
-| Spool (841 / 528)   | .682 | .748 | .704 | .794 | .622 | .696 | .723 |
-
-Surface combines SfM and published alpha≥0.5 samples; it inherits publication
-selection and density rules. It supports testing triangulation/distance features,
-but is neither an independent measured surface nor a trained-render score.
-
-**Visibility sensitivity:** H tier AUC at FOV 50° / 70° / 90°:
-0bb8 .770/.799/.814; Pumpkin .965/.960/.903; 8b74 .747/.787/.789;
-c935 .795/.845/.878; Spool .931/.968/.960. A c935 change of .083 across FOV
-assumptions is material. Unconditioned accuracy-absence H AUC remains inverted:
-Pumpkin .017/.025/.062, Spool .018/.015/.024. Real orientation/occlusion could
-change all these results; FOV sensitivity does not bound that error.
-
-## 4. Phone recommendation and recalibration loop
-
-**Retain 14 normal-relative hemisphere hairs, 25° cone, linear cosine credit
-(sharpness 1), fill 8 only as the explicit experimental baseline.** This is a
-recommendation for the next experiment, not a measured quality threshold. There is
-no evidence here to replace those numbers with another supposedly calibrated set.
-The existing data supports separating angular novelty, resolution, and visibility;
-it does not support saying a full hair means a good trained splat.
-
-Use surfel normals where stable; world-relative directions would confuse a wall's
-missing front view with a floor's missing overhead view. Store a stable tangent
-frame; changing a PCA normal must not silently reinterpret accumulated hair bins.
-Thin/two-sided vegetation may need a two-sided representation and should not be
-forced into a single outward hemisphere. Keep “not observed” distinct from “observed
-but trained badly.” Camera tracking and cell occupancy alone cannot infer occlusion.
-
-For a practical 10 cm cell update, use live calibrated pose/intrinsics and depth
-visibility; accumulate 14 dot products and scalar credits, best footprint, a few
-representative directions and frame usability. Fourteen float accumulators cost
-56 bytes per cell before metadata. At 10k cells this is ~0.56 MB for credits; updating
-1k visible cells at 10 Hz is 140k hair dot products/s, an arithmetic estimate, **not a
-phone benchmark**. Do not update every cell for every raw 60 fps frame. Select usable
-keyframes with motion/parallax and time separation, record that sampling policy,
-and recalibrate fill under that policy. Repeating 942 nearly identical frames must
-not imply all-around coverage.
-
-The footprint factor above (trial target 2 mm/px) and a 15–30° parallax sweep are
-**unverified candidates**. For now show resolution/degeneracy as separate diagnostics;
-do not quietly multiply them into production hairs or promise centimetre accuracy.
-Normal reliability, blur thresholds, occlusion tolerances, SH degree and chosen live
-keyframe cadence need measurement too. A cosine cone is a smooth angular kernel;
-physics does not identify its cone width or power without held-out residual data.
-
-After each real scan trains:
-
-1. Preserve live per-cell credits, normal/frame, pose/intrinsics, keyframe IDs and
-   usability, in a versioned coordinate frame with metric scale and algorithm version.
-2. Join them to **pre-gate** trained surface patches, held-out L1/SSIM/LPIPS and
-   measurement weight. Keep true zeros separate from missing measurements.
-3. Fit on scans, split validation by scan/site/session and angular blocks, not random
-   pixels. Test nearby every-eighth interpolation and genuinely novel elevated/side
-   views separately. Include nested training subsets for view-count degradation.
-4. Compare count-only, distinct-direction, parallax and hair kernels; report held-out
-   R², calibration curves and false-full rates at a defined target error/detail.
-   Bootstrap sites/scans/regions when enough exist. Freeze parameters only after
-   leave-site-out performance and a live replay agree.
-5. Version new parameters, re-evaluate old captures, and retain the measured error
-   distribution behind “full.” Do not turn a fitted kernel into a probability of
-   correctness without reliability calibration.
-
-## 5. Calibration tool for the later GPU run
-
-`calibration.py` implements the backend-independent path; `renderers.py` supplies
-both `NumpyBackend` and lazy `GsplatBackend`; `gpu.py` loads the actual trainer
-dataset/PLY and fits; `modal_job.py` is an **explicit later dispatch** CLI. No stage,
-recipe, API or production publisher was registered or changed.
-
-The Modal wrapper reuses `infra/modal/app.py`'s pinned gsplat **1.6.0 commit
-512d366b**, torch/CUDA image and isolated `/opt/trainer` Python, plus
-`modal_adapter.GPU_NAMES` and `GPU_RESERVATION`. It mounts an **existing private
-research volume**, not production object storage. `cloud.StageRequest`/`remote.execute`
-were inspected: their stage registration/output transfer is unnecessary for an
-isolated experiment and would write pipeline artifacts. This tool uses the same
-image/interpreter/reservation conventions without registering a new production stage.
-Old holdout module prose still mentions 1.5.3; a current-image rerender is not proof
-of byte-identical behavior to historical training. Record the actual trainer/image
-commit, rasterization settings and SH degree in the run provenance.
-
-Prepare privately: the exact assembled training `data_dir` (images, intrinsics,
-undistortion/masks, sparse points/cameras), pre-gate trained PLY, verified metric
-scale, and original split/settings. With an already valid held-out model, use
-`--trained-test-every 8 --ply ...`. For c935, that would be dishonest: it trained
-**all 724 frames**. Its only valid options are:
-
-- **Fresh retrain with split:** `--trained-test-every 0 --retrain-with-split` trains
-  from the same SfM initialization, no checkpoint resume, holding out 91 frames and
-  training on 633. The tool builds argv with `training.gsplat_argv`, MCMC, cap
-  5,626,152, 60k steps by default (30k base schedule scaled 2×), requested SH and rendering mode. It records argv,
-  names and PLY hash. This is a controlled baseline, not automatic replay of every
-  convergence/regularization option of the old run. Match the old settings before
-  treating it as a bake-off. Shared SfM poses/initial points still use the full capture;
-  validation is photometric holdout, not independent pose reconstruction.
-- **Actually unused frames:** `--external-test-dataset` accepts separately registered
-  leave-out frames in the **same metric frame**, rejects overlapping image names,
-  and records the operator's provenance obligation. Renaming a training image does
-  not make it independent. No such images are in this snapshot. Removing frames
-  only from the evaluator of the original all-frame PLY does not undo training.
-
-Example **for later execution, not executed in this research** (private research
-volume must already contain the dataset; no public fetch command is provided):
-
-```bash
-cd tools/pipeline
-python -m experiments.coverage_quality.modal_job --tier l40s -- \
-  --dataset /research/c935/dataset --out /research/c935/calibration-split8 \
-  --trainer /opt/gsplat/examples/simple_trainer.py \
-  --trained-test-every 0 --retrain-with-split --metres-per-unit 1 \
-  --test-every 8 --steps 60000 --cap 5626152 --sh-degree 3
-```
-
-Direct GPU-box equivalent runs `python -m experiments.coverage_quality.gpu` under
-`GSPLAT_PYTHON`. Use `--antialiased`, `--unpacked`, `--data-factor` and SH degree to
-match the model. Optimized camera poses/exposure/appearance modules must be exported
-or baked consistently; raw COLMAP poses are insufficient if pose optimization ran.
-`--frame-meta` accepts a parsed JSON `imageName -> {blur, exposure}` map; absent values
-stay null. `--metres-per-unit` is required, so unresolved physical scale blocks a
-claim about 10 cm patches and mm/px instead of silently assuming one metre.
-
-The procedure is implemented as follows:
-
-1. Render pre-gate PLY with lazy gsplat, true cameras, matching SH/classic-or-AA and
-   packed setting, black background, RGB plus expected camera-z depth (`RGB+ED`).
-   Match the trainer's RGB frame/mask via its `Parser`/`Dataset`, normalization off.
-2. Render bounded 160-pixel training-camera depth maps for approximate visibility.
-   Test depth reprojects to 0.1 m **3-D** patch IDs, with normals from depth gradients.
-   Reject alpha≤0.5, masks and large depth-gradient/silhouette steps. Depth is alpha
-   composited expected depth, not guaranteed physical surface; transparent layers
-   and silhouettes remain limitations. Training visibility tolerance is max(5 cm,
-   1% depth); this is a fixed research approximation, not calibrated occlusion.
-3. Per test pixel compute RGB L1 and the repo's local SSIM; aggregate member pixels
-   per patch, sample up to 256 patches per test frame. Score a 32×32 neighborhood
-   centred on each patch using trainer-compatible AlexNet LPIPS from torchmetrics.
-   LPIPS is a **neighborhood score** and can include neighboring surfaces; it is not
-   falsely described as a per-pixel LPIPS attribution. Stream test RGBs one at a time.
-4. From **training cameras only**, compute nearest test-to-training bearing angle,
-   counts within 10/20/30°, best `1000 distance/(focal × |cos incidence|)` mm/px,
-   exact maximum pairwise parallax, observing-view count, mean logged blur/exposure.
-   Visibility uses the bounded depth maps; measurements use original focal lengths.
-5. Fit L1, combined error and LPIPS separately: candidate cones 10/20/25/30/45/60°,
-   powers .5/1/2/4, views-to-fill 1/2/4/8/16. Model error as
-   `intercept + positive_slope × (1 − min(sum credit / fill, 1))`, hair centred on
-   the **test direction**. Equal total weight per spatial patch, leave-test-view-out
-   R², plus a simple nearest-angle regression. Optional best-footprint target
-   1/2/4/8 mm/px and parallax soft gate 10/15/20/30° multiply effective views before
-   saturation and are retained only for >.02 improvement in leave-view-out R².
-   This patch-level best-footprint multiplier is not yet the per-view weighting
-   proposed for live hairs; that transfer needs replay validation.
-6. Write `patches.csv`, `fit.json`, `provenance.json`, and error-versus-angle,
-   footprint and parallax plots. Fit reports in-sample and leave-view-out R² and
-   grid-boundary warnings, or `no_monotone_fit`. Selecting the grid on those same
-   folds is **exploratory CV**, not nested unbiased model assessment. Spatial/temporal
-   dependence, count/fill/intercept confounding and narrow angular range can make
-   parameters non-identifiable. A stride-8 split often leaves only near-neighbor
-   test views; validate on withheld angular blocks and other scans before phone use.
-
-The pure NumPy reference projects rotated anisotropic covariance through a pinhole
-Jacobian and composites 2-D Gaussians front-to-back, returning RGB, alpha and expected
-depth. It supports isotropic scales as a special case. It is intentionally a tiny
-reference, not a claim of gsplat numerical equivalence: covariance floor, cutoffs,
-sorting, SH and AA differ. CPU LPIPS remains **null**, not an L1 substitute.
-
-`tests/test_coverage_calibration.py` generates 300 anisotropic Gaussians, five training
-cameras, two test cameras and 64×48 images. Real image differences are planted as
-`L1 = .01 + .002 × nearest_angle_degrees`; the complete render/depth/visibility/
-patch/metric/fit/output path must recover the slope within .0003 and R²>.93 (hair fit
-R²>.9). Other tests verify compositing/depth, anisotropic footprint and refusal to
-call an all-frame model held-out. Only NumPy and pytest are needed locally; GPU,
-plotting and Modal imports are lazy.
-
-### GPU budget: rate evidence and explicit assumptions
-
-From `tools/pipeline/providers.py:125–149` and
-`modal_adapter.py:218–229`, **surveyed repo rates, not a current online quote**:
-
-| Tier | GPU $/s | 2 CPU + 16 GiB $/s | Total $/s | Total $/h |
-| ---- | ------: | -----------------: | --------: | --------: |
-| L4   | .000222 |          .00006172 | .00028372 |  1.021392 |
-| L40S | .000542 |          .00006172 | .00060372 |  2.173392 |
-
-Reservation arithmetic: `2 × .0000131 + 16 × .00000222`. Usage above the reservation
-is billed extra. Adapter prose mentioning 8 GiB is stale; use the constant, current
-image and rate implementation. Source dates are 2026-09-23/27, as recorded there.
-
-c935's job records 724 registered/trained frames, 5,626,152 Gaussians, 2,764,800
-pixels per frame in `trainAdmission`, **3,666.55 s = 61.11 min** training on L40S
-(60k steps), billed train container 3,956.43 s and $2.3886. Do not confuse whole job
-7,230.99 s with training. 91 held-out frames = ceil(724/8); no new poses needed for
-the photometric-split baseline. The recorded L40S/L4 speed ratio ~2.3 in
-`modal_adapter.py:166` is an estimate from another benchmark, not measured for this scan.
-
-| Later job                                                            | L40S minutes / dollars | L4 minutes / dollars     |
-| -------------------------------------------------------------------- | ---------------------- | ------------------------ |
-| Render/evaluate only, already valid split or genuinely unused frames | 5–15 / **$0.18–0.54**  | 8–25 / **$0.14–0.43**    |
-| Fresh split retrain plus evaluation                                  | 66–96 / **$2.39–3.48** | 149–212 / **$2.54–3.61** |
-
-Render/evaluate assumptions: 91 native-resolution test RGB+depth renders, 633 small
-training depth renders (724 for an external-test all-frame model), ≤23,296 LPIPS
-neighborhoods, feature extraction/fits and warm input load. Native renders assumed
-roughly 0.2–1 s/frame on L40S, small-depth renders 0.02–0.10 s, with most remaining
-budget in LPIPS/CPU features and data loading. **These throughputs are unmeasured.**
-The range is a planning allowance, not a benchmark; slow storage or single-patch
-LPIPS calls can exceed it. First run a bounded `--max-test-frames 8 --max-patches 64`
-rehearsal and price its measured phases before the full batch.
-
-Retrain assumes L40S 61–81 min (observed 61.11 plus margin); L4 141–187 min using
-~2.3× multiplier, then adds evaluation above. Keeping 60k optimization steps means
-holding out 1/8 does **not** automatically save 1/8 of training cost. L4 fits the
-recorded admission cap but is near its resolution-dependent ceiling; L40S is the
-more practical capacity choice. These costs exclude image rebuild, queue delay,
-volume/storage charges, new SfM, transfer outside the allowance, and idle scale-down
-(up to another minute per container). A matching-image retrain, settings audit and
-an actual timing rehearsal remain required. **No GPU expenditure occurred here.**
-
-## 6. Exact missing artifacts and the smallest useful export
-
-| Missing artifact                                                                                                                  | Analysis it blocks                                                                                                                       | Proposed later pipeline/publish change (not implemented here)                                                                                                 |
-| --------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pose/poses/{cameras.bin,images.bin}` or equivalent ARKit cameras with image IDs, intrinsics/distortion, R/t and frame convention | True frustum visibility, real focal/GSD, training-only view directions, exact parallax and split identity                                | Publish a decimated camera JSON/NPZ with full orientation/intrinsics, image names, capture order and train/val role, plus original-to-render image transforms |
-| Verified metric similarity / `placement.json` / exact `georef.json`                                                               | Physical 10 cm patches, normals and rays in the same frame, real mm/px; several old sites have unresolved scale                          | Export the similarity, scale provenance and uncertainty with cameras and sample; c935 ARKit evidence should be preserved explicitly                           |
-| Pre-gate `train/trained.ply`, including dropped opacity/scales/quaternions/SH                                                     | Unselected shape/opacity analysis, real rasterization and depth/error attribution; published leaf rows cannot reconstruct dropped splats | Keep the private full PLY for calibration; publish a deterministic decimated **pre-gate** sample retaining shape/SH/tier and stable original row IDs          |
-| `quality/support/` views/spread/GSD/reasons/alpha/tier, including dropped rows                                                    | Exact rule replay, exact geometric visibility comparison, disagreement decomposition and pre-gate matched correlations                   | Publish a ≤100k-row sample keyed to those same row IDs and placement, not separately randomized centres                                                       |
-| `quality.json` with thresholds, pointed ROI, support-mask provenance, raw support summaries and held-out report                   | Historical threshold overrides, true camera pointing target, GSD normalizer and support-mask selection                                   | Publish a scrubbed research descriptor, including recipe/code hashes; current registration summary drops these details                                        |
-| `train/holdout/{holdout_error.npy,holdout_weight.npy,holdout_views.npy,holdout.json}` and per-cell measured denominator           | Continuous independent outcomes; distinguish an unmeasured zero accuracy bit from verified low error; robust conditional AUC/LOJO        | Export sampled continuous residual/weight/measurement flags and cell sums; leave “not measured” explicit                                                      |
-| Actual undistorted training/held-out RGB frames, masks and split manifest                                                         | Render-versus-photo L1/SSIM/LPIPS, blur/exposure measures, valid new splits                                                              | Private calibration bundle/volume with exact image hashes, names, masks, split and resized intrinsics; do not publish personal imagery by default             |
-| Learned camera/exposure/appearance corrections, train configuration and renderer/image commit                                     | Matching optimized poses, SH, AA and baked colour; replaying old training accurately                                                     | Preserve effective cameras and exported appearance settings with the private bundle                                                                           |
-| Per-frame blur/exposure/timestamps and live per-cell/keyframe log                                                                 | Distinguishing repeated blurry frames from useful observations; mapping fitted fill to phone cadence                                     | Export parsed frame metadata plus live coverage accumulator/version in the same metric frame                                                                  |
-
-Camera centres alone cannot supply orientation, opacity alone cannot supply error,
-and the absence of an accuracy bit cannot supply its missing denominator. Those are
-the specific limits preventing a measured phone-quality claim today.
+### What remains unverified and what to export next
+
+| Missing evidence                                                                  | What it prevents                                                                              | Smallest useful later export/experiment                                                                                                                                              |
+| --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Raw observing angles or IDs for each held-out patch                               | Exact 3/5/7° or power 8/16 extension, unseen kernel shapes                                    | Derived ragged-angle arrays with patch/view IDs and observing denominators, or exact extended-grid sufficient statistics; evaluate retained models without retraining                |
+| Fixed-patch, fixed-view repeated measurements and per-pixel residual variance     | A genuine noise ceiling, separate from real view-dependent appearance                         | Repeat renders/photos with unchanged geometry and controlled capture perturbations; log pixel residual moments and stable surface correspondences                                    |
+| Multiple scans, causal view-count ablations, live cell/keyframe logs              | Universal fill, scan transfer, mapping sampler cadence to phone fullness                      | Nested training subsets of the same scans plus whole-scan holdouts; join live versions/eligible frame IDs to trained regions                                                         |
+| Surveyed scale/geometry, effective visibility and surface truth                   | Correct Beach physical patch sizes/mm/px, geometric accuracy claims                           | Metric control/checkpoints and scale uncertainty, occlusion/normal checks, independent surface comparison                                                                            |
+| Public original camera orientations/intrinsics and split IDs                      | Replacing the no-GPU camera-centre/FOV assumptions                                            | Publish decimated cameras with full R/t, K/distortion, names, frame transforms and train/val roles; they were available privately to the GPU evaluator, not to the original snapshot |
+| Public pre-gate Gaussian attributes plus aligned support/reasons/held-out weights | Exact historical rule replay; matched dropped-vs-kept shape and independent residual analysis | A shared-ID decimated pre-gate sample with views/spread/GSD/alpha/ROI/tier/error/weight and threshold/code provenance                                                                |
+| Continuous public holdout/quality/confidence measurement denominators             | Distinguishing unmeasured cells from verified low-error cells                                 | Sampled error/weight/measurement flags, cell sums, support-mask/ROI and threshold metadata                                                                                           |
+
+No production stage, recipe, API or iOS behavior changes are part of this research.
+The calibration code remains a pluggable gsplat GPU backend plus NumPy CPU reference;
+GPU imports are lazy. Main evaluation uses the metadata-only camera reader and
+single-test-view trainer pixel path, with incremental tables and time reserved for
+partial fits. Those controls are implementation evidence, not extra quality labels.
+
+The rehearsals exposed and fixed three concrete issues: invalid explicit schedule
+scales (.01 for rehearsal and 2.0 for main); unbounded all-training-camera depth
+renders/per-patch camera loops without logs; and eager all-camera Parser setup.
+The fixes used valid schedules, batched cached visibility, phase logs/deadlines,
+metadata-only training cameras and one-test-view image assembly. The retained c935
+rehearsal model was re-evaluated without retraining. Final measured setup was
+**6.86 s c935 / 11.13 s Beach**; visibility **7.48 / 39.44 s**. c935 evaluation took
+**484.61 s**, predominantly local patch/features (**406.33 s**), inside its 5,226.97 s
+main total. The remaining main time includes training, stage-in and export; it
+must not all be reported as optimizer time. Beach evaluation took **160.01 s**
+inside its 163.22 s main total. Both completed all requested held-out views.
+
+## 7. Modal billing
+
+These are the worker's numbers, read at **23:40Z** (re-read after the 23:21Z first read) from
+`modal billing report --for today --show-resources`, filtered to
+`coverage-quality-20261125-v2` apps. The same apps totaled **$0 at 20:48Z**, before
+the campaign. The last app may still be settling; these are observed report values,
+not a final invoice or a fresh query from this offline analysis.
+
+| App / campaign work                  | Reported USD |
+| ------------------------------------ | -----------: |
+| `ap-QRwcGQ…`, main c935              |       3.1576 |
+| `ap-AS6ccd…`, freeze/rehearsal group |        .0248 |
+| `ap-RZcqaV…`, freeze/rehearsal group |        .1030 |
+| `ap-Uf8nVV…`, freeze/rehearsal group |        .0330 |
+| `ap-UseOvg…`, freeze/rehearsal group |        .2623 |
+| `ap-gnNNSU…`, freeze/rehearsal group |        .1653 |
+| `ap-dTAKc0…`, freeze/rehearsal group |        .0100 |
+| `ap-ZPbHM5…`, main Beach             |        .0472 |
+| **Reported total**                   |   **3.8032** |
+| Approved cap                         |   **5.0000** |
+
+Displayed per-app amounts sum to $3.8032. The report was **$1.1968 under the cap at that read**.
+This includes failed rehearsals, freeze and retained-model re-evaluation, not just
+the successful main calls. The supplied short app IDs do not establish a one-to-one
+mapping from every grouped amount to a rehearsal, so none is invented here.
 
 ## Verification
 
-The requested offline uv invocation failed before resolving a venv: it could not
-create its cache lock under read-only `/home/harrison/.cache/uv`. The authorized
-fallback was used from this worktree's `tools/pipeline`, with `TMPDIR` inside the
-worktree `.tmp` and four-thread environment limits:
+The authorized main-checkout `.venv` fallback was used from this worktree's
+`tools/pipeline`, with TMPDIR/cache locations under the worktree `.tmp` and compute
+threads capped at four. The CPU image-level planted-relation dry run and all bench
+tests are included in the gate:
 
 ```bash
-/home/harrison/Documents/Projects/Hexapod/tools/pipeline/.venv/bin/ruff check \
-  experiments/coverage_quality tests/test_coverage_calibration.py
-/home/harrison/Documents/Projects/Hexapod/tools/pipeline/.venv/bin/ruff format --check \
-  experiments/coverage_quality tests/test_coverage_calibration.py
-/home/harrison/Documents/Projects/Hexapod/tools/pipeline/.venv/bin/python -m pytest -q \
-  tests/test_coverage_calibration.py
-/home/harrison/Documents/Projects/Hexapod/tools/pipeline/.venv/bin/mypy \
-  experiments/coverage_quality tests/test_coverage_calibration.py
+PIPELINE_PY=/home/harrison/Documents/Projects/Hexapod/tools/pipeline/.venv/bin
+export TMPDIR="$PWD/../../.tmp" PYTHONDONTWRITEBYTECODE=1
+export OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4
+export MYPY_CACHE_DIR="$TMPDIR/mypy" RUFF_CACHE_DIR="$TMPDIR/ruff"
+export PYTEST_ADDOPTS='-o cache_dir=../../.tmp/pytest-cache'
+"$PIPELINE_PY/ruff" check experiments/coverage_quality \
+  experiments/bench/scene.py experiments/bench/worker.py tests/test_coverage_calibration.py
+"$PIPELINE_PY/ruff" format --check experiments/coverage_quality \
+  experiments/bench/scene.py experiments/bench/worker.py tests/test_coverage_calibration.py
+"$PIPELINE_PY/python" -m pytest -q tests/test_coverage_calibration.py tests/test_bench*.py
+"$PIPELINE_PY/mypy" experiments/coverage_quality \
+  experiments/bench/scene.py experiments/bench/worker.py tests/test_coverage_calibration.py
 ```
 
-Final fallback gate tail after the implementation edits:
-
-```text
-All checks passed!
-8 files already formatted
-4 passed
-Success: no issues found in 8 source files
-```
-
-The Python gate was run after the final report edit as well. Temporary files were removed.
-GPU image construction,
-CUDA rendering, original trainer reproduction and the real-data fit remain unexecuted.
+The final scoped gate passed: Ruff, format, **136 tests**, and mypy on **17 source
+files**, using the `.venv` fallback. New tests cover view-cluster bootstrap,
+disjoint bins/tied ranks, confounder removal, repeat consistency versus noise-ceiling
+claims, exact raw-angle extension with restoration of the original grid, refusal to
+invent missing angles, and the table-copy size policy. Temporary files are removed;
+no commit, network request or Modal call was made for this write-up.

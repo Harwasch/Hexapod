@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -130,6 +131,12 @@ class GsplatBackend:
         self.tensors: dict[str, Any] = {}
 
     def render(self, scene: Scene, camera: Camera) -> Render:
+        return self.render_many(scene, [camera])[0]
+
+    def render_many(self, scene: Scene, cameras: Sequence[Camera]) -> list[Render]:
+        if not cameras or len({(c.width, c.height) for c in cameras}) != 1:
+            raise ValueError("nonempty same-size camera batch required")
+        camera = cameras[0]
         import torch
         from gsplat import rasterization
 
@@ -148,8 +155,8 @@ class GsplatBackend:
         with torch.no_grad():
             rgbd, alpha, _ = rasterization(
                 **self.tensors,
-                viewmats=tensor(np.linalg.inv(camera.c2w)[None]),
-                Ks=tensor(camera.k[None]),
+                viewmats=tensor(np.linalg.inv(np.array([c.c2w for c in cameras]))),
+                Ks=tensor(np.array([c.k for c in cameras])),
                 width=camera.width,
                 height=camera.height,
                 sh_degree=scene.sh_degree,
@@ -157,8 +164,11 @@ class GsplatBackend:
                 rasterize_mode=self.mode,
                 render_mode="RGB+ED",
             )
-        return Render(
-            rgbd[0, ..., :3].clamp(0, 1).cpu().numpy(),
-            alpha[0, ..., 0].cpu().numpy(),
-            rgbd[0, ..., 3].cpu().numpy(),
-        )
+        # One scene upload per backend/run, one RGB+ED raster call per batch. Transfer
+        # together rather than synchronizing and copying once per camera/channel.
+        rgbd_cpu = rgbd.detach().cpu().numpy()
+        alpha_cpu = alpha.detach().cpu().numpy()
+        return [
+            Render(np.clip(rgbd_cpu[i, ..., :3], 0, 1), alpha_cpu[i, ..., 0], rgbd_cpu[i, ..., 3])
+            for i in range(len(cameras))
+        ]

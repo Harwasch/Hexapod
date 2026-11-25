@@ -1,0 +1,77 @@
+{
+  "error": {
+    "cone_deg": 10,
+    "sharpness": 4,
+    "views_to_fill": 2,
+    "coefficients": [0.04894688444584943, 0.017529815416326564],
+    "r2": 0.020475164295204462,
+    "leave_view_out_r2": 0.011057031973652487,
+    "resolution_target_mm_px": null,
+    "parallax_gate_deg": null,
+    "status": "exploratory",
+    "rows": 1310,
+    "test_views": 38,
+    "spatial_patches": 1310,
+    "target": "error",
+    "scene_names": ["beach"],
+    "scene_intercepts": false,
+    "angle_baseline": {
+      "intercept": 0.056902679358066886,
+      "slope_per_deg": 5.4055872927591976e-5,
+      "r2": 0.0076531334623112235,
+      "leave_view_out_r2": -0.0025972208232643013
+    },
+    "grid_boundary": true,
+    "caution": "Exploratory grid CV; adjacent patches/views correlated. Validate on new scans."
+  },
+  "l1": {
+    "cone_deg": 10,
+    "sharpness": 4,
+    "views_to_fill": 4,
+    "coefficients": [0.025138553664186613, 0.009837625280614779],
+    "r2": 0.018290803417450707,
+    "leave_view_out_r2": 0.007342136561336976,
+    "resolution_target_mm_px": null,
+    "parallax_gate_deg": null,
+    "status": "exploratory",
+    "rows": 1310,
+    "test_views": 38,
+    "spatial_patches": 1310,
+    "target": "l1",
+    "scene_names": ["beach"],
+    "scene_intercepts": false,
+    "angle_baseline": {
+      "intercept": 0.031233349692590565,
+      "slope_per_deg": 1.706141942540394e-5,
+      "r2": 0.0026215349031668556,
+      "leave_view_out_r2": -0.008956662426417017
+    },
+    "grid_boundary": true,
+    "caution": "Exploratory grid CV; adjacent patches/views correlated. Validate on new scans."
+  },
+  "lpips": {
+    "cone_deg": 10,
+    "sharpness": 4,
+    "views_to_fill": 16,
+    "coefficients": [0.024303374878133648, 0.017432343819432306],
+    "r2": 0.007640588535790416,
+    "leave_view_out_r2": -0.0018539873380658545,
+    "resolution_target_mm_px": null,
+    "parallax_gate_deg": null,
+    "status": "exploratory",
+    "rows": 1310,
+    "test_views": 38,
+    "spatial_patches": 1310,
+    "target": "lpips",
+    "scene_names": ["beach"],
+    "scene_intercepts": false,
+    "angle_baseline": {
+      "intercept": 0.036334817848743574,
+      "slope_per_deg": 3.752287827893449e-5,
+      "r2": 0.004065903014964789,
+      "leave_view_out_r2": -0.008387725729565032
+    },
+    "grid_boundary": true,
+    "caution": "Exploratory grid CV; adjacent patches/views correlated. Validate on new scans."
+  }
+}

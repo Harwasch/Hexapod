@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.util
 import json
 import os
 import subprocess
@@ -262,61 +261,6 @@ def plots(rows: list[dict[str, Any]], fits: dict[str, Any], out: Path) -> None:
     fig.tight_layout()
     fig.savefig(out / "error_geometry.png", dpi=120)
     plt.close(fig)
-
-
-def build_modal_app() -> tuple[Any, dict[str, Any]]:
-    """Explicit opt-in construction for later deployment; never called by CPU tools.
-
-    Reuse infra/modal/app.py's pinned image (including both sibling source trees),
-    reservation and tier names. A mounted research volume carries prepared inputs and
-    outputs; no production Transfer/stage registration or bucket writes.
-    """
-    import modal
-
-    from modal_adapter import GPU_NAMES, GPU_RESERVATION
-
-    repo = Path(__file__).resolve().parents[4]
-    source = repo / "infra/modal/app.py" if modal.is_local() else Path("/root/app.py")
-    spec = importlib.util.spec_from_file_location("coverage_training_image", source)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("cannot load repository training image definition")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    image = module.image  # Trainer requirements already include matplotlib and LPIPS weights.
-    app = modal.App("hex-coverage-quality-research")
-    volume = modal.Volume.from_name("hex-coverage-quality-research", create_if_missing=False)
-
-    def evaluate(arguments: list[str]) -> dict[str, Any]:
-        # The outer image interpreter is 3.12, while CUDA dependencies are in 3.10.
-        env = {
-            **os.environ,
-            "PYTHONPATH": "/opt/pipeline",
-            "OMP_NUM_THREADS": "4",
-            "OPENBLAS_NUM_THREADS": "4",
-            "MKL_NUM_THREADS": "4",
-        }
-        subprocess.run(  # noqa: S603 - explicit operator CLI, no shell or data commands
-            [os.environ["GSPLAT_PYTHON"], "-m", "experiments.coverage_quality.gpu", *arguments],
-            env=env,
-            check=True,
-            timeout=6 * 3600,
-        )
-        volume.commit()
-        return {"status": "complete", "output": "research volume; see --out"}
-
-    functions = {}
-    for tier in ("l4", "l40s"):
-        functions[tier] = app.function(
-            image=image,
-            gpu=GPU_NAMES[tier],
-            cpu=GPU_RESERVATION[0],
-            memory=GPU_RESERVATION[1],
-            timeout=6 * 3600,
-            retries=0,
-            volumes={"/research": volume},
-            name=f"calibrate_{tier}",
-        )(evaluate)
-    return app, functions
 
 
 def main() -> None:
