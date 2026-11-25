@@ -83,6 +83,9 @@
       init(model: CameraModel) {
         self.model = model
         super.init()
+        model.frameFeed.camera.onFourKRejected = { [weak self] in
+          Task { @MainActor [weak self] in self?.restartWithoutFourK() }
+        }
         model.frameFeed.onEvent = { [weak self] event in
           Task { @MainActor [weak self] in
             guard let self else { return }
@@ -115,9 +118,7 @@
             return
           }
           guard self.active, !self.interrupted else { return }
-          let configuration = ARWorldTrackingConfiguration()
-          configuration.frameSemantics = [.sceneDepth, .smoothedSceneDepth]
-          configuration.worldAlignment = .gravity
+          let configuration = self.configuration(fourK: true)
           self.model.attach(view)
           view.session.run(configuration)
           self.running = true
@@ -133,6 +134,31 @@
             Task { @MainActor [weak self] in self?.model.tick() }
           }
         }
+      }
+      /// The scan session: gravity-aligned world tracking with raw and smoothed LiDAR depth,
+      /// in ARKit's 4K format unless `fourK` is false or this device ruled it out.
+      private func configuration(fourK: Bool) -> ARWorldTrackingConfiguration {
+        Self.configuration(fourK: fourK, camera: model.frameFeed.camera)
+      }
+      private static func configuration(fourK: Bool, camera: CaptureCamera)
+        -> ARWorldTrackingConfiguration
+      {
+        let configuration = ARWorldTrackingConfiguration()
+        configuration.frameSemantics = [.sceneDepth, .smoothedSceneDepth]
+        configuration.worldAlignment = .gravity
+        var kind = "default"
+        if fourK {
+          let (format, chosen) = CaptureCamera.videoFormat()
+          if let format { configuration.videoFormat = format }
+          kind = chosen
+        }
+        camera.configure(configuration, kind: kind)
+        return configuration
+      }
+      /// The first frames showed 4K without matching depth: run the default format instead.
+      func restartWithoutFourK() {
+        guard running, let view else { return }
+        view.session.run(configuration(fourK: false), options: [.resetTracking])
       }
       @objc private func displayFrame() { model.displayTick() }
       @objc func tap(_ gesture: UITapGestureRecognizer) {
@@ -176,7 +202,9 @@
     func setPerceptionDriver(_ driver: CameraPerceptionDriver?) {
       lock.withLock { perceptionDriver = driver }
     }
+    var camera: CaptureCamera { ingress.camera }
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
+      ingress.camera.observe(frame)
       ingress.offer(frame)
       let consumers = lock.withLock { (preview, perceptionDriver) }
       consumers.0?.offer(frame)
