@@ -73,6 +73,9 @@ def normalize(ctx: StageContext) -> StageOutcome:
                 frame_size=(record["imageWidth"], record["imageHeight"]),
             ).to_dict()
         )
+    import arkit_depth
+
+    arkit_depth.export(frames, directory, capture.frames)
     platform = {
         "value": "phone-video",
         "source": "capture-bundle",

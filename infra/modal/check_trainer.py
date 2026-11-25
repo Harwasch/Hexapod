@@ -113,6 +113,10 @@ def main() -> int:
             packed=True,
             sparse_grad=True,
             visible_adam=True,
+            extra=[
+                "--arkit-depth-loss", "--arkit-depth-weight", "0.02",
+                "--arkit-depth-warmup", "1000",
+            ],
         )
     )
     # With `converge`: the held-out evaluations the stopping rule reads, as extra
@@ -194,6 +198,10 @@ def main() -> int:
         "sparse_grad": tuned.sparse_grad is True and cfg.sparse_grad is False,
         "visible_adam": tuned.visible_adam is True and cfg.visible_adam is False,
         "depth_loss": tuned.depth_loss is True and cfg.depth_loss is False,
+        "arkit_depth": (
+            tuned.arkit_depth_loss and not cfg.arkit_depth_loss
+            and tuned.arkit_depth_weight == 0.02 and tuned.arkit_depth_warmup == 1000
+        ),
         "pose_opt": tuned.pose_opt is True and cfg.pose_opt is False,
         "app_opt": tuned.app_opt is True and cfg.app_opt is False,
         "use_bilateral_grid": (
@@ -248,7 +256,6 @@ def _exercise_full_data(namespace: dict[str, Any], parse: Any, trainer: Path) ->
     from types import SimpleNamespace
 
     import torch
-
     import train_split
     import trainer_export
     import training
@@ -293,8 +300,8 @@ def _exercise_switches(namespace: dict[str, Any]) -> list[str]:
     other two are the classes the trainer module itself imported from `utils`.
     """
     import torch
-    from lib_bilagrid import BilateralGrid, slice, total_variation_loss
     from gsplat.color_correct import color_correct_quadratic
+    from lib_bilagrid import BilateralGrid, slice, total_variation_loss
 
     ran: list[str] = []
     height, width = 12, 16
