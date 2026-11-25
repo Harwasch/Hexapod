@@ -177,7 +177,98 @@ def validate_frame(frame: dict[str, Any], index: int, previous: float) -> float:
     integer(frame.get("imageHeight"), "imageHeight", minimum=1)
     if not isinstance(frame.get("trackingState"), str):
         raise ValueError("missing tracking state")
+    validate_exposure(frame, index)
     return float(timestamp)
+
+
+def finite_number(value: object) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def validate_exposure(frame: dict[str, Any], index: int) -> None:
+    """Optional per-frame camera exposure (app 2026-11+); older bundles omit every field."""
+    duration = frame.get("exposureDurationS")
+    if duration is not None and not (finite_number(duration) and 0 < duration <= 1):
+        raise ValueError(f"frame {index}: exposureDurationS must be in (0, 1] seconds")
+    offset = frame.get("exposureOffsetEV")
+    if offset is not None and not finite_number(offset):
+        raise ValueError(f"frame {index}: exposureOffsetEV must be a finite number")
+    iso = frame.get("iso")
+    if iso is not None and not (finite_number(iso) and iso > 0):
+        raise ValueError(f"frame {index}: iso must be positive")
+    gains = frame.get("whiteBalanceGains")
+    if gains is not None and not (
+        isinstance(gains, list)
+        and len(gains) == 3
+        and all(finite_number(g) and g > 0 for g in gains)
+    ):
+        raise ValueError(f"frame {index}: whiteBalanceGains must be three positive numbers")
+
+
+VIDEO_FORMAT_KINDS = {"default", "4k"}
+#: Why the app's 4K probe fell back: no depth within its budget, or depth of another aspect.
+FALLBACK_REASONS = {"noDepth", "depthAspect"}
+EXPOSURE_MODES = {"auto", "locked", "custom"}
+WHITE_BALANCE_MODES = {"auto", "locked"}
+
+
+def validate_capture_settings(manifest: dict[str, Any], first: dict[str, Any]) -> None:
+    """Optional manifest records of the ARKit video format and the exposure lock."""
+    video_format = manifest.get("videoFormat")
+    if video_format is not None:
+        if not isinstance(video_format, dict) or video_format.get("kind") not in VIDEO_FORMAT_KINDS:
+            raise ValueError("videoFormat.kind must be one of " + str(sorted(VIDEO_FORMAT_KINDS)))
+        size = (
+            integer(video_format.get("width"), "videoFormat.width", minimum=1),
+            integer(video_format.get("height"), "videoFormat.height", minimum=1),
+        )
+        integer(video_format.get("framesPerSecond"), "videoFormat.framesPerSecond", minimum=1)
+        # ARKit reports the format landscape, as capturedImage is stored.
+        if size != (first["imageWidth"], first["imageHeight"]):
+            raise ValueError("videoFormat size differs from the recorded frames")
+        fallback = video_format.get("fallback")
+        if fallback is not None:
+            if not isinstance(fallback, dict) or fallback.get("reason") not in FALLBACK_REASONS:
+                raise ValueError(
+                    "videoFormat.fallback.reason must be " + str(sorted(FALLBACK_REASONS))
+                )
+            integer(fallback.get("imageWidth"), "videoFormat.fallback.imageWidth", minimum=1)
+            integer(fallback.get("imageHeight"), "videoFormat.fallback.imageHeight", minimum=1)
+            for key in ("depthWidth", "depthHeight"):
+                if fallback.get(key) is not None:
+                    integer(fallback[key], f"videoFormat.fallback.{key}", minimum=1)
+    control = manifest.get("exposureControl")
+    if control is not None:
+        if (
+            not isinstance(control, dict)
+            or control.get("mode") not in EXPOSURE_MODES
+            or control.get("whiteBalance") not in WHITE_BALANCE_MODES
+        ):
+            raise ValueError("exposureControl needs a known mode and whiteBalance")
+        for key, upper in (("durationS", 1.0), ("iso", math.inf)):
+            value = control.get(key)
+            if value is not None and not (finite_number(value) and 0 < value <= upper):
+                raise ValueError(f"exposureControl.{key} must be positive")
+        shortfall = control.get("shortfallEV")
+        if shortfall is not None and not (finite_number(shortfall) and shortfall >= 0):
+            raise ValueError("exposureControl.shortfallEV must be a non-negative number")
+
+
+#: The largest frame the bundle normalizer still extracts losslessly: the 4:3 1920x1440
+#: ARKit default. 720 such PNGs are ~4 GB; the same count at 3840x2160 is ~11-13 GB, beyond
+#: what the 20 GB capture worker can hold beside the archive. Larger frames are written as
+#: JPEG at ffmpeg -q:v 2, the quality the ordinary video path already trains from.
+MAX_PNG_PIXELS = 1920 * 1440
+JPEG_QUALITY = 2
+
+
+def frame_suffix(width: int, height: int) -> str:
+    """The extension normalize gives a bundle's frames at this size."""
+    return ".png" if width * height <= MAX_PNG_PIXELS else ".jpg"
+
+
+def frame_name(index: int, suffix: str = ".png") -> str:
+    return f"frame_{index:08d}{suffix}"
 
 
 def read_locations(
@@ -411,6 +502,8 @@ def read_bundle(directory: Path) -> Bundle:
                         )
                 counts[key] += 1
             frames.append(frame)
+    if frames:
+        validate_capture_settings(manifest, frames[0])
     unreferenced = set(inventory) - used
     missing = used - set(inventory)
     if len(frames) != count or unreferenced or missing:

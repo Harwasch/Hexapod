@@ -368,27 +368,27 @@ and COLMAP's [known-pose reconstruction](https://colmap.github.io/faq.html#recon
 
 The shared-session `ScanRecordingWorker` builds `rgb.mov` settings through the
 pure `CaptureVideoSettings` builder in the Capture package. HEVC is retained.
-Its average bitrate is `min(width × height × 15 × 0.65, 30_000_000)` bits/s:
+Its average bitrate is `min(width × height × 15 × 0.65, 55_000_000)` bits/s:
 **26,956,800 bit/s at 1920×1440**, about 5.7 times the reported 4.7 Mbit/s default
 in the 48-second capture. The 0.65 bits/pixel/frame budget deliberately spends
 more bits on reconstruction texture than the default; it is an initial policy,
-not a measured optimum. Larger formats cap at 30 Mbit/s, accepting fewer bits
-per pixel. The writer retains expected input rate 15, maximum keyframe interval
+not a measured optimum. Larger formats cap at 55 Mbit/s, accepting fewer bits
+per pixel: the 3840×2160 format records at 55 Mbit/s (~0.44 bits/pixel/frame). The writer retains expected input rate 15, maximum keyframe interval
 15 (one second at nominal cadence), and frame reordering disabled. These existing
 GOP/reordering settings are preserved; no independent quality gain is claimed for
 them. Dropped packets can make the wall-clock GOP longer. `AVVideoQualityKey` is
 omitted: support for quality-based control alongside HEVC average-bitrate control
 is not assumed. The standalone legacy recorder remains unchanged.
 
-At the target rate, 48 seconds of RGB is **161.7 MB** (decimal); the 30 Mbit/s cap
-targets 180 MB. Average bitrate is not a hard byte ceiling: actual encoder output,
+At the target rate, 48 seconds of RGB is **161.7 MB** (decimal) at 1920×1440 and
+**330 MB** at 3840×2160. Average bitrate is not a hard byte ceiling: actual encoder output,
 scene complexity and movie overhead need device measurement. Duration remains
 user-controlled. Raw plus smoothed depth/confidence at 256×192 and 720 packets
 adds about **212.3 MB**, so this example's full uncompressed bundle is about
 374 MB plus JSON/USTAR overhead. Budget phone space for the recording folder,
 archive, uploader's retained archive copy and one upload part; RGB size alone is
 not the storage requirement. Higher bitrate cannot undo exposure motion blur;
-motion-speed feedback/capture guidance remains deferred.
+the exposure lock and slow-down cue below address that.
 
 No upload or worker limits need raising for that example:
 
@@ -415,6 +415,56 @@ verify that HEVC accepts the settings, measure bitrate/file size on a textured
 compare detail at matched motion/exposure, and check thermal behavior, writer
 backpressure and finalized video/JSONL counts. Also complete a real bundle upload
 and reconstruction; simulator or arithmetic tests cannot establish image quality.
+
+## Sharp capture: 4K format, exposure lock and slow-down cue
+
+The scan session asks ARKit for `recommendedVideoFormatFor4KResolution` (3840×2160,
+16:9, 30 fps; frames are still admitted at 15 Hz). ARKit often delivers depth only once
+tracking has initialized, so the probe (`FourKProbe`) counts only frames that carry depth:
+ten whose depth aspect matches the image accept 4K. Depth of another aspect would map onto
+the wrong pixels through normalized intrinsics, so it rejects 4K on this device for this
+app build (`hex.capture.fourKFallback.<build>`, a later build tries again); no depth at all
+within 3 s rejects it for that session only. Either way the session restarts in the
+default 1920×1440 format. The manifest's optional `videoFormat` records what was used:
+`{"kind": "4k" | "default", "width", "height", "framesPerSecond", "fallback"?}`, the size
+landscape as `capturedImage` is stored, and must match the frames. `fallback` is the
+probe's evidence, `{"reason": "noDepth" | "depthAspect", "imageWidth", "imageHeight",
+"depthWidth"?, "depthHeight"?}`: what depth ARKit pairs with its 4K format, in case a 4:3
+depth over a 16:9 crop can be mapped by crop later.
+
+When a scan starts, after at least a second of metering, the primary capture device
+(`configurableCaptureDeviceForPrimaryCamera`) holds its exposure (`ExposurePlan`). A metered
+shutter at or under 1/250 s is locked as is. A longer one is shortened only as far as ISO
+1600 (`noiseCeilingISO`, or the sensor's own maximum if lower) allows, never below 1/250 s
+and never longer than metered: 1/60 s at ISO 200 becomes 1/250 s at ISO 833, 1/30 s at ISO
+400 becomes 1/120 s at ISO 1600, and 1/30 s already at ISO 1600 stays. The splat learns
+sensor noise as readily as blur, so the ceiling bounds it; the slow-down cue uses each
+frame's actual shutter, so it tightens or relaxes with the exposure chosen. White balance
+is locked. Both return to auto when the scan stops. The manifest's optional
+`exposureControl` records `{"mode": "auto" | "locked" | "custom", "whiteBalance": "auto" |
+"locked", "durationS"?, "iso"?, "shortfallEV"?}`, the last how much darker than metered the
+held exposure is when the sensor's ISO range runs out.
+
+Each frame may carry `exposureDurationS` (ARCamera.exposureDuration, in (0, 1] s),
+`exposureOffsetEV`, `iso` and `whiteBalanceGains` (red, green, blue). All are
+optional; older bundles omit them and stay valid.
+
+While recording, the record button's ring shows predicted motion blur, from
+consecutive ARKit poses: `blur_px ≈ shutter × fx × (ω + v / d)`, with `d` the confident
+smoothed depth at the image centre (1.5 m otherwise). White below 1 px, amber to 3 px,
+red and pulsing above. One pixel at 1/250 s is about 5°/s at the 4K focal length
+(fx ≈ 2830 px) and 10°/s at 1440p (`MotionBlurMeter`).
+
+The pipeline extracts frames larger than 1920×1440 as JPEG at ffmpeg `-q:v 2`, the
+quality the ordinary video path trains from, instead of PNG: 720 PNGs at 3840×2160 are
+~11–13 GB, beyond what the 20 GB capture worker holds beside the archive. 1440p bundles
+stay PNG. A 48 s 4K bundle is ~330 MB of RGB plus ~212 MB of depth, and the worker
+peaks near 4 GB with the archive, the unpacked bundle and the JPEG frames.
+
+Training at native 3840×2160 would lower the memory-bounded splat ceiling (L40S
+11.8M at 1440p, 5.1M at 4K; `gaussian_budget.memory_ceiling`) and roughly triple the
+time per step. Until a bench says otherwise, train 4K bundles with
+`{"train": {"train_max_side": 2560}}` (2560×1440, L40S ceiling 9.7M).
 
 ## Optional live preview export
 

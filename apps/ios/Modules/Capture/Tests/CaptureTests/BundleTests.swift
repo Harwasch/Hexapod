@@ -155,3 +155,57 @@ import Testing
   try CaptureArchive.write(bundle: folder, to: archive)
   #expect(try CaptureArchive.readManifest(from: archive).liveSplat == "livesplat.ply")
 }
+
+@Test func exposureAndFormatRecordsRoundTripAndOldFramesDecode() throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let folder = root.appendingPathComponent("capture")
+  let writer = try CaptureBundleWriter(directory: folder, device: "fixture")
+  writer.videoFormat = CaptureVideoFormat(kind: "4k", width: 3840, height: 2160, framesPerSecond: 30)
+  writer.exposureControl = CaptureExposureControl(
+    mode: "custom", whiteBalance: "locked", durationS: 0.004, iso: 640)
+  try Data([1]).write(to: folder.appendingPathComponent("rgb.mov"))
+  let identity: [Double] = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+  let k: [Double] = [2830, 0, 1920, 0, 2830, 1080, 0, 0, 1]
+  let exposed = CaptureFrame(
+    index: 0, timestamp: 0, transform: identity, intrinsics: k, imageWidth: 3840,
+    imageHeight: 2160, trackingState: "normal",
+    exposure: CaptureExposure(
+      durationS: 0.004, offsetEV: -0.3, iso: 640, whiteBalanceGains: [1.9, 1, 1.6]))
+  try writer.append(exposed)
+  var broken = exposed
+  broken.index = 1
+  broken.timestamp = 0.1
+  broken.whiteBalanceGains = [1, 1]
+  #expect(throws: CaptureError.invalidFrame) { try writer.append(broken) }
+  broken.whiteBalanceGains = nil
+  broken.exposureDurationS = 2
+  #expect(throws: CaptureError.invalidFrame) { try writer.append(broken) }
+  let manifest = try writer.finish()
+  #expect(manifest.videoFormat?.kind == "4k")
+  #expect(manifest.exposureControl?.iso == 640)
+  let line = try Data(contentsOf: folder.appendingPathComponent("frames.jsonl"))
+  #expect(try JSONDecoder().decode(CaptureFrame.self, from: line) == exposed)
+  // A frame from an older recorder carries none of the new keys.
+  let old = #"{"index":0,"timestamp":0,"transform":[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1],"intrinsics":[1,0,0,0,1,0,0,0,1],"imageWidth":1,"imageHeight":1,"trackingState":"normal"}"#
+  let decoded = try JSONDecoder().decode(CaptureFrame.self, from: Data(old.utf8))
+  #expect(decoded.iso == nil && decoded.exposureDurationS == nil)
+  #expect(!String(decoding: try JSONEncoder().encode(decoded), as: UTF8.self).contains("iso"))
+}
+
+@Test func defaultFormatCarriesTheFourKProbeEvidence() throws {
+  let evidence = CaptureFormatFallback(
+    reason: "depthAspect", imageWidth: 3840, imageHeight: 2160, depthWidth: 256, depthHeight: 192)
+  let format = CaptureVideoFormat(
+    kind: "default", width: 1920, height: 1440, framesPerSecond: 60, fallback: evidence)
+  let json = try JSONEncoder().encode(format)
+  #expect(try JSONDecoder().decode(CaptureVideoFormat.self, from: json) == format)
+  let control = CaptureExposureControl(
+    mode: "custom", whiteBalance: "locked", durationS: 1.0 / 120, iso: 1600, shortfallEV: 0)
+  #expect(
+    try JSONDecoder().decode(CaptureExposureControl.self, from: JSONEncoder().encode(control))
+      == control)
+  // A 4K scan carries no fallback key at all.
+  let plain = CaptureVideoFormat(kind: "4k", width: 3840, height: 2160, framesPerSecond: 30)
+  #expect(!String(decoding: try JSONEncoder().encode(plain), as: UTF8.self).contains("fallback"))
+}

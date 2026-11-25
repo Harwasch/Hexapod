@@ -8,7 +8,11 @@
   /// ARFrame and pixel buffers are immutable snapshots. Only a reserved queue slot retains one.
   final class ScanFrame: @unchecked Sendable {
     let frame: ARFrame
-    init(_ frame: ARFrame) { self.frame = frame }
+    let exposure: CaptureExposure
+    init(_ frame: ARFrame, exposure: CaptureExposure = CaptureExposure()) {
+      self.frame = frame
+      self.exposure = exposure
+    }
   }
   enum ScanPacket: Sendable {
     case frame(ScanFrame)
@@ -34,7 +38,9 @@
     let timestamp: Double
     let transform: [Double], intrinsics: [Double]
     let tracking: String
-    init(_ frame: ARFrame) {
+    var exposure = CaptureExposure()
+    init(_ frame: ARFrame, exposure: CaptureExposure = CaptureExposure()) {
+      self.exposure = exposure
       image = frame.capturedImage
       raw = frame.sceneDepth.map(ScanDepth.init)
       smooth = frame.smoothedSceneDepth.map(ScanDepth.init)
@@ -62,6 +68,7 @@
 
   /// The delegate does admission + retain only. Lock also orders stop against the last admission.
   final class ScanIngress: @unchecked Sendable {
+    let camera = CaptureCamera()
     private let lock = NSLock()
     private var writer: BackgroundWriter<ScanPacket>?
     private var cadence = CaptureCadence()
@@ -77,7 +84,8 @@
         guard let writer, frame.sceneDepth?.confidenceMap != nil,
           frame.smoothedSceneDepth?.confidenceMap != nil, cadence.admit(frame.timestamp)
         else { return }
-        writer.submit { .frame(ScanFrame(frame)) }
+        let exposure = camera.exposure(frame)
+        writer.submit { .frame(ScanFrame(frame, exposure: exposure)) }
       }
     }
     func location(_ fix: CaptureLocation) {
@@ -107,7 +115,7 @@
     func write(_ packet: ScanPacket) throws {
       switch packet {
       case .location(let fix): try bundle.appendLocation(fix)
-      case .frame(let transfer): try append(ScanSample(transfer.frame))
+      case .frame(let transfer): try append(ScanSample(transfer.frame, exposure: transfer.exposure))
       }
     }
     func append(_ frame: ScanSample) throws {
@@ -148,7 +156,7 @@
         index: index, timestamp: timestamp,
         transform: frame.transform, intrinsics: frame.intrinsics,
         imageWidth: width, imageHeight: height, trackingState: frame.tracking, depth: raw,
-        smoothedDepth: smooth)
+        smoothedDepth: smooth, exposure: frame.exposure)
       guard
         pixels.append(
           frame.image,
@@ -210,7 +218,10 @@
       files.append(.init(name: name + ".u8", data: confidences))
       return DepthReference(file: name + ".f16", confidence: name + ".u8", width: w, height: h)
     }
-    func finish(details: CaptureDetails?) async throws {
+    func finish(
+      details: CaptureDetails?,
+      settings: (CaptureVideoFormat?, CaptureExposureControl)? = nil
+    ) async throws {
       guard let video, index > 0 else { throw CaptureError.incomplete }
       input?.markAsFinished()
       await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
@@ -239,6 +250,13 @@
       if let details {
         try JSONEncoder().encode(details).write(
           to: directory.appendingPathComponent("capture-info.json"), options: .atomic)
+      }
+      if let (format, control) = settings {
+        // The format is what ARKit was asked for; record it only if the frames match it.
+        if let format, format.width == width, format.height == height {
+          bundle.videoFormat = format
+        }
+        bundle.exposureControl = control
       }
       _ = try bundle.finish()
     }

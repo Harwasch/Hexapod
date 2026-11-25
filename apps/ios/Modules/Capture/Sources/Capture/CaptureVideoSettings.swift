@@ -1,16 +1,19 @@
 /// Reconstruction RGB budget for the App's nominal 15 fps shared-session recorder.
-/// 0.65 bits/pixel/frame gives ~27 Mbit/s at 1920x1440; cap larger formats at 30 Mbit/s.
+/// 0.65 bits/pixel/frame gives ~27 Mbit/s at 1920x1440. ARKit's 3840x2160 format would ask
+/// ~81 Mbit/s; it is capped at 55 Mbit/s (~0.44 bits/pixel/frame, ~330 MB for 48 s), where
+/// HEVC already holds detail at that size and the upload stays bounded.
 /// This is an average-rate target, not a hard file-size or encoder-throughput guarantee.
 public struct CaptureVideoSettings: Sendable {
   public let width: Int
   public let height: Int
   public let averageBitRate: Int
+  public static let maximumBitRate = 55_000_000.0
 
   public init(width: Int, height: Int) {
     precondition(width > 0 && height > 0)
     self.width = width
     self.height = height
-    averageBitRate = Int(min(Double(width) * Double(height) * 15 * 0.65, 30_000_000).rounded())
+    averageBitRate = Int(min(Double(width) * Double(height) * 15 * 0.65, Self.maximumBitRate).rounded())
   }
 }
 

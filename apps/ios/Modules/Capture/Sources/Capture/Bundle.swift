@@ -31,11 +31,20 @@ public struct CaptureFrame: Codable, Equatable, Sendable {
   public var trackingState: String
   public var depth: DepthReference?
   public var smoothedDepth: DepthReference?
+  /// The frame's shutter time (ARCamera.exposureDuration), seconds.
+  public var exposureDurationS: Double?
+  /// ARCamera.exposureOffset: the camera's bias from its own metered exposure, EV.
+  public var exposureOffsetEV: Double?
+  /// The primary camera's ISO when the frame was admitted.
+  public var iso: Double?
+  /// The primary camera's device white-balance gains, red/green/blue.
+  public var whiteBalanceGains: [Double]?
 
   public init(
     index: Int, timestamp: Double, transform: [Double], intrinsics: [Double],
     imageWidth: Int, imageHeight: Int, trackingState: String,
-    depth: DepthReference? = nil, smoothedDepth: DepthReference? = nil
+    depth: DepthReference? = nil, smoothedDepth: DepthReference? = nil,
+    exposure: CaptureExposure? = nil
   ) {
     self.index = index
     self.timestamp = timestamp
@@ -46,6 +55,103 @@ public struct CaptureFrame: Codable, Equatable, Sendable {
     self.trackingState = trackingState
     self.depth = depth
     self.smoothedDepth = smoothedDepth
+    exposureDurationS = exposure?.durationS
+    exposureOffsetEV = exposure?.offsetEV
+    iso = exposure?.iso
+    whiteBalanceGains = exposure?.whiteBalanceGains
+  }
+
+  /// Absent fields are fine (older recorders); present ones must be physical.
+  var exposureIsValid: Bool {
+    if let d = exposureDurationS, !(d.isFinite && d > 0 && d <= 1) { return false }
+    if let o = exposureOffsetEV, !o.isFinite { return false }
+    if let i = iso, !(i.isFinite && i > 0) { return false }
+    if let g = whiteBalanceGains, g.count != 3 || !g.allSatisfy({ $0.isFinite && $0 > 0 }) {
+      return false
+    }
+    return true
+  }
+}
+
+/// One frame's exposure, read from ARCamera and the primary capture device.
+public struct CaptureExposure: Equatable, Sendable {
+  public var durationS: Double?
+  public var offsetEV: Double?
+  public var iso: Double?
+  public var whiteBalanceGains: [Double]?
+
+  public init(
+    durationS: Double? = nil, offsetEV: Double? = nil, iso: Double? = nil,
+    whiteBalanceGains: [Double]? = nil
+  ) {
+    self.durationS = durationS
+    self.offsetEV = offsetEV
+    self.iso = iso
+    self.whiteBalanceGains = whiteBalanceGains
+  }
+}
+
+/// Which ARKit video format recorded the bundle. `kind` is "4k" or "default".
+public struct CaptureVideoFormat: Codable, Equatable, Sendable {
+  public var kind: String
+  public var width: Int
+  public var height: Int
+  public var framesPerSecond: Int
+  /// Why a default-format scan is not 4K, when 4K was tried and rejected, with what the
+  /// probe saw: so we learn what depth ARKit pairs with its 4K format.
+  public var fallback: CaptureFormatFallback?
+
+  public init(
+    kind: String, width: Int, height: Int, framesPerSecond: Int,
+    fallback: CaptureFormatFallback? = nil
+  ) {
+    self.kind = kind
+    self.width = width
+    self.height = height
+    self.framesPerSecond = framesPerSecond
+    self.fallback = fallback
+  }
+}
+
+/// The 4K probe's evidence: "noDepth" (none within the budget) or "depthAspect".
+public struct CaptureFormatFallback: Codable, Equatable, Sendable {
+  public var reason: String
+  public var imageWidth: Int
+  public var imageHeight: Int
+  public var depthWidth: Int?
+  public var depthHeight: Int?
+
+  public init(
+    reason: String, imageWidth: Int, imageHeight: Int, depthWidth: Int? = nil,
+    depthHeight: Int? = nil
+  ) {
+    self.reason = reason
+    self.imageWidth = imageWidth
+    self.imageHeight = imageHeight
+    self.depthWidth = depthWidth
+    self.depthHeight = depthHeight
+  }
+}
+
+/// What the app did to the camera's exposure after metering: "auto", "locked" or "custom"
+/// (a capped shutter with ISO raised to compensate), and whether white balance was locked.
+public struct CaptureExposureControl: Codable, Equatable, Sendable {
+  public var mode: String
+  public var whiteBalance: String
+  public var durationS: Double?
+  public var iso: Double?
+  /// How much darker than metered the held exposure is, when ISO ran out (ExposurePlan).
+  public var shortfallEV: Double?
+
+  public init(
+    mode: String, whiteBalance: String, durationS: Double? = nil, iso: Double? = nil,
+    shortfallEV: Double? = nil
+  ) {
+    self.mode = mode
+    self.whiteBalance = whiteBalance
+    self.durationS = durationS
+    self.iso = iso
+    self.shortfallEV = shortfallEV
   }
 }
 
@@ -68,6 +174,8 @@ public struct CaptureManifest: Codable, Equatable, Sendable {
   public var liveSplat: String?
   public var locationLog: String?
   public var location: CaptureLocation?
+  public var videoFormat: CaptureVideoFormat?
+  public var exposureControl: CaptureExposureControl?
   /// Every payload file, excluding manifest.json itself.
   public var files: [BundleFile]
 }
@@ -85,6 +193,9 @@ public final class CaptureBundleWriter {
   private var smoothedCount = 0
   private var lastTimestamp: Double = -1
   private var closed = false
+  /// Recorded into the manifest when set; older recorders leave both out.
+  public var videoFormat: CaptureVideoFormat?
+  public var exposureControl: CaptureExposureControl?
 
   public init(directory: URL, device: String, startedAt: Date = Date()) throws {
     guard !FileManager.default.fileExists(atPath: directory.path) else {
@@ -127,7 +238,8 @@ public final class CaptureBundleWriter {
     guard frame.index == count, frame.timestamp.isFinite, frame.timestamp > lastTimestamp,
       count > 0 || frame.timestamp == 0, frame.transform.count == 16,
       frame.intrinsics.count == 9, frame.transform.allSatisfy(\.isFinite),
-      frame.intrinsics.allSatisfy(\.isFinite), frame.imageWidth > 0, frame.imageHeight > 0
+      frame.intrinsics.allSatisfy(\.isFinite), frame.imageWidth > 0, frame.imageHeight > 0,
+      frame.exposureIsValid
     else { throw CaptureError.invalidFrame }
     for reference in [frame.depth, frame.smoothedDepth].compactMap({ $0 }) {
       guard reference.width > 0, reference.height > 0 else { throw CaptureError.invalidFrame }
@@ -186,7 +298,8 @@ public final class CaptureBundleWriter {
       device: device, startedAt: startedAt, frameCount: count,
       depthFrameCount: depthCount, smoothedDepthFrameCount: smoothedCount,
       liveSplat: files.contains(where: { $0.path == "livesplat.ply" }) ? "livesplat.ply" : nil,
-      locationLog: locationLog == nil ? nil : "location.jsonl", location: location, files: files)
+      locationLog: locationLog == nil ? nil : "location.jsonl", location: location,
+      videoFormat: videoFormat, exposureControl: exposureControl, files: files)
     try JSONEncoder().encode(manifest).write(
       to: directory.appendingPathComponent("manifest.json"), options: .atomic)
     return manifest

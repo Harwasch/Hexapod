@@ -45,7 +45,13 @@
           }
           let directory = root.appendingPathComponent(UUID().uuidString)
           let worker = try await ScanRecordingWorker.create(directory: directory, device: device)
-          guard generation == id, !Task.isCancelled else { return }
+          // Hold exposure and white balance for the whole scan, before the first frame is
+          // admitted, so no frame of it is auto-exposed (CaptureCamera.holdExposure).
+          await ingress.camera.holdExposure()
+          guard generation == id, !Task.isCancelled else {
+            ingress.camera.releaseExposure()
+            return
+          }
           let writer = BackgroundWriter<ScanPacket>(capacity: 4) { try await worker.write($0) }
           self.worker = worker
           self.writer = writer
@@ -74,6 +80,8 @@
       guard isRecording else { return }
       isRecording = false
       location.stopUpdatingLocation()
+      let settings = ingress.camera.settings
+      ingress.camera.releaseExposure()
       onChange?(false, false)
       guard let worker, let writer, let directory else {
         fail()
@@ -86,7 +94,7 @@
         do {
           // Drain retained frames BEFORE closing the codec and publishing the inventory.
           try await writer.close()
-          try await worker.finish(details: details)
+          try await worker.finish(details: details, settings: settings)
           self?.reset()
           self?.onPhase?(.saved(directory))
         } catch {
@@ -97,6 +105,7 @@
     }
     private func fail() {
       ingress.stop()
+      ingress.camera.releaseExposure()
       location.stopUpdatingLocation()
       reset()
       onChange?(false, true)
