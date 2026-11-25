@@ -108,13 +108,15 @@ import Testing
 @Test @MainActor func coveragePreferencePersistsIndependentlyAndKeepsActiveScan() async throws {
   let store = MemoryPreferenceStore()
   let preference = LiveSplatPreference(store: store)
-  #expect(!preference.coverageEnabled)
+  #expect(preference.coverageEnabled)
   let renderer = DefaultLiveSplatRenderer(preference: preference)
   renderer.start()
   let source = try FakeFrameSource.plane()
   renderer.ingest(try #require(await source.next()))
   let generation = renderer.sessionGeneration
   let count = renderer.splats.count
+  preference.coverageEnabled = false
+  #expect(!LiveSplatPreference(store: store).coverageEnabled)
   preference.coverageEnabled = true
   #expect(LiveSplatPreference(store: store).coverageEnabled)
   #expect(

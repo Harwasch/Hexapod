@@ -101,10 +101,13 @@ import Voice
   let registry = PieceRegistry(defaults: defaults, liveSplatPreference: preference)
   let renderer = try #require(
     try registry.splatRenderers.resolve("real") as? DefaultLiveSplatRenderer)
-  #expect(!renderer.preference.coverageEnabled)
+  // On by default: the coverage cue is what a new scanner should see without opening Settings.
+  #expect(renderer.preference.coverageEnabled)
   renderer.start()
-  preference.coverageEnabled = true
+  preference.coverageEnabled = false
   let restored = LiveSplatPreference(store: UserDefaultsLiveSplatStore(defaults: defaults))
+  #expect(!restored.coverageEnabled && !renderer.preference.coverageEnabled)
+  preference.coverageEnabled = true
   #expect(restored.coverageEnabled && renderer.preference.coverageEnabled)
   #expect(restored.previewEnabled && !restored.insetEnabled && restored.previewStyle == .discs)
   #expect(try registry.splatRenderers.resolve("real") === renderer)

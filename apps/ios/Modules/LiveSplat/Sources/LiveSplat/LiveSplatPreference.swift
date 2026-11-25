@@ -60,7 +60,7 @@ public enum ScanPreviewStyle: String, CaseIterable, Sendable {
     set { update(newValue, key: Self.insetKey, current: insetEnabled) }
   }
   public var coverageEnabled: Bool {
-    get { store.bool(forKey: Self.coverageKey) ?? false }
+    get { store.bool(forKey: Self.coverageKey) ?? true }
     set { update(newValue, key: Self.coverageKey, current: coverageEnabled) }
   }
   private func update(_ value: Bool, key: String, current: Bool) {
