@@ -14,6 +14,8 @@
     var enabled = true
     var splat = false
     var inset = false
+    var coverage = false
+    var coverageGeneration: UInt64 = 0
     var orbit = ScanOrbit()
     var generation: UInt64 = 0
     var orientation: UIInterfaceOrientation = .portrait

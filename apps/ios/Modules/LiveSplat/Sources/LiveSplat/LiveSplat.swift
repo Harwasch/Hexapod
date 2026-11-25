@@ -251,7 +251,9 @@ public final class DefaultLiveSplatRenderer: LiveSplatRenderer, LiveSplatPrefere
   }
   func preferenceChanged() {
     #if canImport(RealityKit) && os(iOS)
-      processor?.setStyle(splat: preference.previewStyle == .splat, inset: preference.insetEnabled)
+      processor?.setStyle(
+        splat: preference.previewStyle == .splat, inset: preference.insetEnabled,
+        coverage: preference.coverageEnabled)
     #endif
     guard status != .stopped else { return }
     status =
@@ -265,7 +267,9 @@ public final class DefaultLiveSplatRenderer: LiveSplatRenderer, LiveSplatPrefere
       if let processor { return processor }
       let value = try ScanPreviewProcessor()
       processor = value
-      value.setStyle(splat: preference.previewStyle == .splat, inset: preference.insetEnabled)
+      value.setStyle(
+        splat: preference.previewStyle == .splat, inset: preference.insetEnabled,
+        coverage: preference.coverageEnabled)
       return value
     }
     public func pollSummary() { liveCoverage = processor?.coverageFraction ?? 0 }

@@ -32,6 +32,8 @@
     private let reduceScene: MTLComputePipelineState, finishScene: MTLComputePipelineState
     private let insetComposite: MTLComputePipelineState
     private var insetColor: MTLTexture?, insetDepth: MTLTexture?
+    private let coverageHairs: CoverageMetalPass
+    private var coverageGeneration: UInt64 = .max
     private let depthState: MTLDepthStencilState
     private var color: MTLTexture?, depth: MTLTexture?
     private var generation: UInt64 = .max
@@ -67,6 +69,7 @@
       self.order = order
       self.scene = scene
       let library = try device.makeDefaultLibrary(bundle: .module)
+      coverageHairs = try CoverageMetalPass(device: device, library: library)
       func function(_ name: String) throws -> MTLFunction {
         guard let value = library.makeFunction(name: name) else { throw LiveSplatError.unavailable }
         return value
@@ -123,18 +126,20 @@
         }
       }
     }
-    public func setStyle(splat: Bool, inset: Bool) {
+    public func setStyle(splat: Bool, inset: Bool, coverage: Bool = false) {
       lock.withLock {
         // Medium-confidence seeds must not leak into the unchanged Discs path.
         if input.splat != splat { input.generation &+= 1 }
         input.splat = splat
         input.inset = inset
+        input.coverage = coverage
       }
     }
     public func setOrbit(_ orbit: ScanOrbit) { lock.withLock { input.orbit = orbit } }
     public func reset() {
       lock.withLock {
         input.generation &+= 1
+        input.coverageGeneration &+= 1
         input.frame = nil
         fraction = 0
         quality = PreviewQuality()
@@ -238,6 +243,10 @@
           epoch = 0
           lastFusion = -.infinity
         }
+        if coverageGeneration != snapshot.coverageGeneration {
+          try coverageHairs.reset(context.commandBuffer)
+          coverageGeneration = snapshot.coverageGeneration
+        }
         let t = frame.displayTransform(for: snapshot.orientation, viewportSize: snapshot.viewport)
         let inverse = t.inverted()
         let k = frame.camera.intrinsics
@@ -293,6 +302,9 @@
             MTLSize(width: sampleCount, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 64, height: 1, depth: 1))
           encoder.endEncoding()
+          if snapshot.coverage {
+            try coverageHairs.fuse(context.commandBuffer, uniforms: &uniforms, textures: textures)
+          }
           lastFusion = frame.timestamp
           fused = true
         }
@@ -317,7 +329,7 @@
         try draw(
           command: context.commandBuffer, uniforms: &uniforms, orbit: &orbit,
           color: color!, depth: depth!, textures: textures, splat: snapshot.splat,
-          enabled: snapshot.enabled, quality: quality, inset: false)
+          enabled: snapshot.enabled, quality: quality, inset: false, hairs: snapshot.coverage)
         guard let encoder = context.commandBuffer.makeComputeCommandEncoder() else {
           throw LiveSplatError.unavailable
         }
@@ -359,6 +371,7 @@
         }
       } catch {
         generation = .max
+        coverageGeneration = .max
         copyCamera(context)
         encodingFailed = true
       }
@@ -379,7 +392,10 @@
                 seconds: command.gpuEndTime - command.gpuStartTime, constrained: constrained)
               if didFuse { fraction = counts[0] == 0 ? 0 : Double(counts[1]) / Double(counts[0]) }
               failure = failedToEncode || command.status == .error
-              if command.status == .error { input.generation &+= 1 }
+              if command.status == .error {
+                input.generation &+= 1
+                input.coverageGeneration &+= 1
+              }
             }
             busy = false
           }
@@ -457,7 +473,7 @@
     private func draw(
       command: MTLCommandBuffer, uniforms: inout PreviewUniforms, orbit: inout OrbitUniforms,
       color: MTLTexture, depth: MTLTexture, textures: [MTLTexture], splat: Bool,
-      enabled: Bool, quality: PreviewQuality, inset: Bool
+      enabled: Bool, quality: PreviewQuality, inset: Bool, hairs: Bool = false
     ) throws {
       // A 32K Gaussian draw cap bounds sort and overdraw. The full voxel scene is
       // retained; evenly spaced hash slots thin the draw at reversible quality levels.
@@ -465,6 +481,9 @@
       let count = GaussianSeed.drawCapacity / quality.visibleStride
       if splat && enabled {
         try sortedOrder(command: command, uniforms: &uniforms, orbit: &orbit, count: count)
+      }
+      if hairs {
+        try coverageHairs.prepareDraw(command, uniforms: &uniforms, quality: quality)
       }
       let pass = MTLRenderPassDescriptor()
       pass.colorAttachments[0].texture = color
@@ -498,6 +517,7 @@
             type: .point, vertexStart: 0, vertexCount: SurfelHash.capacity / quality.visibleStride)
         }
       }
+      if hairs && quality.level < 2 { coverageHairs.draw(render, uniforms: &uniforms) }
       if inset {
         render.setRenderPipelineState(frustumPipeline)
         render.setDepthStencilState(gaussianDepthState)

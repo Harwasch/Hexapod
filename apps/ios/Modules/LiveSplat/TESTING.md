@@ -90,3 +90,34 @@ fixture ingestion, not the live GPU path. There is no UIKit fallback or local tr
 Before `pnpm format:check`, remove generated `.scratch/build`, `.scratch/cache`,
 `.scratch/config`, `.scratch/security` and `.scratch/tmp`: Prettier otherwise scans
 SwiftPM's generated JSON/YAML. Keep test logs and the task's commit manifest.
+
+## Coverage hairs
+
+Iterate with `bash apps/ios/Modules/LiveSplat/test-piece.sh coverage` or the
+`CoverageHairTests` filter. The Linux suite asserts the exact 32-byte ABI/offsets,
+cone boundaries, sharpness, saturation, resolution weighting, octahedral quantization
+(in both hemispheres, using an analytic quantization bound), parameter resource
+loading/defaults/rejection, hash dedupe/collisions/replacement, normal EMA and
+per-keyframe admission. A synthetic hemisphere camera orbit fills every plane hair;
+an opposing orbit leaves the excluded hair empty. The parallax test distinguishes
+repeated same-view credit, insufficient separation and a valid second contributor.
+The capacity run feeds four times the full grid capacity and asserts fixed storage
+counts, not process RSS. Preference/App wiring tests cover default off, persistence,
+independence and keeping the active renderer and scan generation.
+
+The Apple-only library smoke test additionally constructs all coverage compute and
+line render pipelines. `CoverageMetalTests` exercises the actual credit kernel with
+an orbit and excluded views, comparing saturated/empty bytes exactly. All async
+Metal library/pipeline creation uses the awaited overload. Linux excludes these
+checks; they have not been run here.
+
+On the phone, enable Coverage next to Preview/Inset. Scan a wall from several
+angles and distances: confirm long amber hairs shorten toward green and disappear,
+back/edge/poor-resolution views do not falsely fill directions, and new scans clear
+all hairs. Compare Discs/Splat, preview off, inset on/off, toggle off/on, style
+switches, portrait/landscape and relaunch persistence. If fitted JSON enables gates,
+confirm distant views earn less credit and a repeated single viewpoint cannot remove
+a gated stub. Judge normal/frame stability, clutter, line visibility, occlusion,
+and the 10 cm grid. Measure FPS, GPU budget, thermals and resident-memory plateau
+over a five-minute scan, including quality decimation/recovery. The UI prototype's
+appearance and usefulness for training are phone acceptance work, not Linux claims.
