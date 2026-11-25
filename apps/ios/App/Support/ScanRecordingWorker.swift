@@ -119,14 +119,7 @@
           outputURL: directory.appendingPathComponent("rgb.mov"), fileType: .mov)
         let input = AVAssetWriterInput(
           mediaType: .video,
-          outputSettings: [
-            AVVideoCodecKey: AVVideoCodecType.hevc, AVVideoWidthKey: width,
-            AVVideoHeightKey: height,
-            AVVideoCompressionPropertiesKey: [
-              AVVideoAllowFrameReorderingKey: false,
-              AVVideoExpectedSourceFrameRateKey: 15, AVVideoMaxKeyFrameIntervalKey: 15,
-            ],
-          ])
+          outputSettings: CaptureVideoSettings(width: width, height: height).outputSettings)
         input.transform = CGAffineTransform(rotationAngle: .pi / 2)
         input.expectsMediaDataInRealTime = true
         input.mediaTimeScale = 1_000_000_000
