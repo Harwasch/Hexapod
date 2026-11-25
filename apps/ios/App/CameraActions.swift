@@ -99,6 +99,24 @@ import Voice
   private var perceptionDriver: CameraPerceptionDriver?
   private var tapSelectionActive = false
   private(set) var perceptionMetrics = InferenceMetrics()
+  private var selectionFeedback = CameraSelectionFeedback()
+  private(set) var pipelineDiagnostics = "Metal self-check not run"
+  var selectionDiagnostics: String {
+    "Last refusal: \(selectionFeedback.lastRefusal?.description ?? "none")"
+  }
+  private func receiveTap(_ result: TapAdmissionResult, log: Bool = true) {
+    if log, case .refused(let reason) = result {
+      CameraDiagnostics.record("Selection refused: \(reason)")
+    }
+    let hadBanner = selectionFeedback.banner != nil
+    selectionFeedback.receive(result)
+    if let banner = selectionFeedback.banner {
+      failureText = banner
+      failed = true
+    } else if hadBanner || failureText == "Selection unavailable" {
+      failed = false
+    }
+  }
   var perceptionPerformance: String {
     if capturePhase.isBusy || isTalking || answering { return "Vision paused" }
     return String(
@@ -164,26 +182,35 @@ import Voice
   func attach(_ view: ARView) {
     arView = view
     cameraReady = true
-    do {
-      if fakeOverlay {
-        overlay = FakeOverlaySink()
-      } else {
-        overlay = try RealityAnswerOverlay(view: view)
-      }
-      if usesLiveCapture {
+    overlay?.remove()
+    let attachment = CameraAttachment.attach(
+      makeOverlay: { () throws -> any AnswerOverlaySink in
+        if fakeOverlay { return FakeOverlaySink() }
+        return try RealityAnswerOverlay(view: view)
+      },
+      makeDriver: { overlay -> CameraPerceptionDriver? in
+        guard usesLiveCapture else { return nil }
         let renderer = (overlay as? RealityAnswerOverlay)?.worldSurfaceRenderer
-        if let driver = perceptionDriver {
-          driver.setRenderer(renderer)
-          driver.setEnabled(true)
-        } else {
-          perceptionDriver = CameraPerceptionDriver(scene: perception, renderer: renderer)
-        }
-        frameFeed.setPerceptionDriver(perceptionDriver)
-        (overlay as? RealityAnswerOverlay)?.enableWorldHighlight()
-        displayTick()
-      }
-      failed = false
-    } catch { failed = true }
+        let driver =
+          perceptionDriver ?? CameraPerceptionDriver(scene: perception, renderer: renderer)
+        driver.setRenderer(renderer)
+        driver.setEnabled(true)
+        return driver
+      })
+    overlay = attachment.overlay
+    perceptionDriver = attachment.driver
+    if let reality = overlay as? RealityAnswerOverlay {
+      pipelineDiagnostics = reality.pipelineChecks.map(\.description).joined(separator: "\n")
+    } else if let error = attachment.overlayError {
+      pipelineDiagnostics = "Overlay failed: \(error)"
+      CameraDiagnostics.record(pipelineDiagnostics)
+    } else {
+      pipelineDiagnostics = "Metal self-check skipped: simulated overlay"
+    }
+    frameFeed.setPerceptionDriver(perceptionDriver)
+    (overlay as? RealityAnswerOverlay)?.enableWorldHighlight()
+    displayTick()
+    failed = false
   }
 
   func beginReplay() {
@@ -229,16 +256,17 @@ import Voice
       driver.setEnabled(enabled)
       if enabled { (overlay as? RealityAnswerOverlay)?.enableWorldHighlight() }
       perceptionMetrics = driver.metrics
+      for event in driver.takeTapEvents() { receiveTap(event, log: false) }
       if let result = driver.takeResult(), driver.isCurrent(result.generation), !capturePhase.isBusy
       {
         if tapSelectionActive {
           presentation.replaceSelection(result.selection.entities)
           overlay?.update(entities: presentation.entities)
           updatePins()
+          highlight(result.selection)
         }
         if result.tapped {
           card = result.card
-          failed = false
         }
       }
     }
@@ -272,9 +300,18 @@ import Voice
   }
 
   func tap(_ point: CGPoint) {
-    guard !capturePhase.isBusy, let view = arView,
-      view.bounds.width > 0, view.bounds.height > 0
-    else { return }
+    guard !capturePhase.isBusy else {
+      receiveTap(.refused(.disabled))
+      return
+    }
+    guard let view = arView else {
+      receiveTap(.refused(.noDriver))
+      return
+    }
+    guard view.bounds.width > 0, view.bounds.height > 0 else {
+      receiveTap(.refused(.noViewport))
+      return
+    }
     card = nil
     answerTask?.cancel()
     questionGeneration = UUID()
@@ -285,16 +322,17 @@ import Voice
     overlay?.stopSpeaking()
     let router = router
     Task { await router.cancel() }
-    if let driver = perceptionDriver, let frame = view.session.currentFrame {
+    if let driver = perceptionDriver {
       driver.setEnabled(true)
-      let accepted = driver.select(
+      let outcome = driver.select(
         ImagePoint(
           x: Double(point.x / view.bounds.width),
-          y: Double(point.y / view.bounds.height)), frame: frame)
-      if !accepted {
-        failed = true
-        failureText = "Selection unavailable"
-      }
+          y: Double(point.y / view.bounds.height)), frame: view.session.currentFrame)
+      receiveTap(outcome)
+      return
+    }
+    if usesLiveCapture {
+      receiveTap(.refused(.noDriver))
       return
     }
     // Explicit simulated replay has no ARFrame or live camera projection.
@@ -311,9 +349,9 @@ import Voice
         updatePins()
         card = selection.entities.count > previousCount ? selection.entities.last : nil
         highlight(selection)
+        receiveTap(.accepted)
       } catch is CancellationError {} catch {
-        failed = true
-        failureText = "Selection unavailable"
+        receiveTap(.refused(.inferenceFailed(String(describing: error))))
       }
     }
   }
@@ -524,8 +562,10 @@ import Voice
   }
 
   private func highlight(_ selection: SceneSelection) {
-    // Live selection surfaces are uploaded by the inference worker, never rasterized on MainActor.
-    guard perceptionDriver == nil, !capturePhase.isBusy, let view = arView else { return }
+    // Use flat projected masks when the world outline renderer could not be built.
+    guard (overlay as? RealityAnswerOverlay)?.worldSurfaceRenderer == nil,
+      !capturePhase.isBusy, let view = arView
+    else { return }
     let scale = min(
       1,
       1536

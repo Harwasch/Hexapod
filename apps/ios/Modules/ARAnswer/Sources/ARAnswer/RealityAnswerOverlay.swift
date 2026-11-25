@@ -15,12 +15,13 @@
     private var scanning = false
     private var installed = false
     private var worldHighlightEnabled = false
-    public var worldSurfaceRenderer: WorldSurfaceRenderer { processor.worldSurfaces }
+    public var worldSurfaceRenderer: WorldSurfaceRenderer? { processor.worldSurfaces }
+    public var pipelineChecks: [OverlayPipelineCheck] { processor.pipelineChecks }
 
     public init(view: ARView) throws {
       self.view = view
       speech.usesApplicationAudioSession = false
-      processor = try HighlightProcessor()
+      processor = HighlightProcessor()
 
     }
     /// Numbered pins live in the SwiftUI viewport, keeping their size independent of depth.
@@ -30,7 +31,7 @@
       if value { setMask(nil) }
     }
     public func enableWorldHighlight() {
-      guard !scanning, !worldHighlightEnabled else { return }
+      guard !scanning, !worldHighlightEnabled, processor.worldSurfaces != nil else { return }
       worldHighlightEnabled = true
       processor.setWorldEnabled(true)
       let processor = processor
@@ -61,27 +62,40 @@
     public func remove() {
       stopSpeaking()
       setMask(nil)
-      worldSurfaceRenderer.clear()
+      worldSurfaceRenderer?.clear()
     }
   }
 
   /// Immutable Metal objects are shared safely; the mask mailbox is protected by lock.
   /// No RealityKit render callback reaches into UI/MainActor state.
   private final class HighlightProcessor: @unchecked Sendable {
+    private enum BuildError: Error { case noMetalDevice, missingSubjectHighlightFunction }
     private let lock = NSLock()
     private var texture: MTLTexture?
     private var worldEnabled = false
-    let worldSurfaces: WorldSurfaceRenderer
-    private let device: MTLDevice
-    private let pipeline: MTLComputePipelineState
-    init() throws {
-      guard let device = MTLCreateSystemDefaultDevice(),
-        let function = try device.makeDefaultLibrary(bundle: .module)
-          .makeFunction(name: "subjectHighlight")
-      else { throw CocoaError(.fileReadUnknown) }
+    let worldSurfaces: WorldSurfaceRenderer?
+    let pipelineChecks: [OverlayPipelineCheck]
+    private let device: MTLDevice?
+    private let pipeline: MTLComputePipelineState?
+    init() {
+      let device = MTLCreateSystemDefaultDevice()
       self.device = device
-      worldSurfaces = try WorldSurfaceRenderer(device: device)
-      pipeline = try device.makeComputePipelineState(function: function)
+      let built = OverlayPipelineCheck.build(
+        highlight: { () throws -> MTLComputePipelineState in
+          guard let device else { throw BuildError.noMetalDevice }
+          guard
+            let function = try device.makeDefaultLibrary(bundle: .module)
+              .makeFunction(name: "subjectHighlight")
+          else { throw BuildError.missingSubjectHighlightFunction }
+          return try device.makeComputePipelineState(function: function)
+        },
+        surface: { () throws -> WorldSurfaceRenderer in
+          guard let device else { throw BuildError.noMetalDevice }
+          return try WorldSurfaceRenderer(device: device)
+        })
+      pipeline = built.highlight
+      worldSurfaces = built.surface
+      pipelineChecks = built.checks
     }
     func setWorldEnabled(_ value: Bool) {
       lock.withLock {
@@ -90,7 +104,7 @@
       }
     }
     func setMask(_ mask: HighlightMask?) {
-      guard let mask, mask.isValid else {
+      guard let mask, mask.isValid, let device else {
         lock.withLock { texture = nil }
         return
       }
@@ -111,8 +125,8 @@
     }
     func render(_ context: ARView.PostProcessContext) {
       let state = lock.withLock { (worldEnabled, texture) }
-      let mask = state.0 ? worldSurfaces.mask(context) : state.1
-      guard let texture = mask,
+      let mask = state.0 ? worldSurfaces?.mask(context) : state.1
+      guard let texture = mask, let pipeline,
         let encoder = context.commandBuffer.makeComputeCommandEncoder()
       else {
         let blit = context.commandBuffer.makeBlitCommandEncoder()
