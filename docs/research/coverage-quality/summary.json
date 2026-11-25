@@ -1,0 +1,3914 @@
+{
+  "seed": 2411,
+  "maximum": 1000,
+  "assumptions": "ROI-looking; cone FOV; no occlusion",
+  "jobs": [
+    {
+      "job": "0bb8dd45",
+      "cameras": 2037,
+      "sample_gaussians": 147963,
+      "voxels": 67363,
+      "evaluated_voxels": 1000,
+      "keep_voxels": 396,
+      "train": {
+        "gaussians": 14015281,
+        "trainFrames": 2037,
+        "valFrames": 0,
+        "trainSeconds": 6560.907068,
+        "metricsSplit": "unavailable: all frames trained",
+        "holdoutError": "off",
+        "shDegree": 3
+      },
+      "quality": {
+        "keep": 6521644,
+        "context": 439356,
+        "drop": 7054281,
+        "keepPct": 48.6,
+        "demotedByHeldOut": null,
+        "keepVerified": null
+      },
+      "structural_rule_tier_agreement": 1.0,
+      "geometry_keep_demotion_rate": 0.0,
+      "geometry_medians": {
+        "views": 722.0,
+        "spread": 30.182838159438944,
+        "distinct15": 2.0,
+        "fisher": 2.021842110293937,
+        "hairs": 0.14285714285714285,
+        "hairs_resolution": 0.004148821277046652,
+        "fisher_resolution": 1.238049573900403,
+        "min_distance": 14.099944242064252,
+        "median_distance": 18.416846200960123,
+        "incidence": 0.3094213380808518,
+        "best_mm_px": 36.11080622173817,
+        "hemisphere_coverage": 0.14285714285714285
+      },
+      "accuracy_cells": { "sampled": 543, "flagged": 0, "cell_m": 0.25, "all_flagged": 0 }
+    },
+    { "job": "50c25673", "excluded": "no coverage/cameras" },
+    {
+      "job": "71556411",
+      "cameras": 56,
+      "sample_gaussians": 149944,
+      "voxels": 4971,
+      "evaluated_voxels": 1000,
+      "keep_voxels": 175,
+      "train": {
+        "gaussians": 711907,
+        "trainFrames": 49,
+        "valFrames": 7,
+        "trainSeconds": 1075.341331,
+        "metricsSplit": "val: every 8th frame",
+        "holdoutError": "ok",
+        "shDegree": 0
+      },
+      "quality": {
+        "keep": 539215,
+        "context": 105106,
+        "drop": 67586,
+        "keepPct": 69.1,
+        "demotedByHeldOut": 13030,
+        "keepVerified": 418922
+      },
+      "structural_rule_tier_agreement": 0.9816970475076099,
+      "geometry_keep_demotion_rate": 0.023594600222727233,
+      "geometry_medians": {
+        "views": 16.0,
+        "spread": 32.11287148148343,
+        "distinct15": 3.0,
+        "fisher": 1.8394002361470216,
+        "hairs": 0.07741286483229273,
+        "hairs_resolution": 0.0042471726180767465,
+        "fisher_resolution": 1.1178930971342969,
+        "min_distance": 3.0024764655342153,
+        "median_distance": 3.2937587371632127,
+        "incidence": 0.5209772329730036,
+        "best_mm_px": 7.127393463413879,
+        "hemisphere_coverage": 0.14285714285714285
+      },
+      "accuracy_cells": {
+        "sampled": 557,
+        "flagged": 36,
+        "cell_m": 0.25,
+        "all_flagged": 36,
+        "no_geometry_reason": 39,
+        "eligible_flagged": 36
+      }
+    },
+    {
+      "job": "8b74e626",
+      "cameras": 137,
+      "sample_gaussians": 149863,
+      "voxels": 2829,
+      "evaluated_voxels": 1000,
+      "keep_voxels": 893,
+      "train": {
+        "gaussians": 200000,
+        "trainFrames": 137,
+        "valFrames": 0,
+        "trainSeconds": 39.230015,
+        "metricsSplit": "unavailable: all frames trained",
+        "holdoutError": "off",
+        "shDegree": 3
+      },
+      "quality": {
+        "keep": 192115,
+        "context": 6790,
+        "drop": 1095,
+        "keepPct": 94.6,
+        "demotedByHeldOut": null,
+        "keepVerified": null
+      },
+      "structural_rule_tier_agreement": 1.0,
+      "geometry_keep_demotion_rate": 0.0,
+      "geometry_medians": {
+        "views": 95.0,
+        "spread": 139.43670842057946,
+        "distinct15": 18.0,
+        "fisher": 7.174170336079617,
+        "hairs": 0.2844761189915652,
+        "hairs_resolution": 0.029452111338094333,
+        "fisher_resolution": 4.148180067686377,
+        "min_distance": 1.4122544890369164,
+        "median_distance": 3.008237157149262,
+        "incidence": 0.3455305402244769,
+        "best_mm_px": 4.511927187584412,
+        "hemisphere_coverage": 0.42857142857142855
+      },
+      "accuracy_cells": { "sampled": 189, "flagged": 0, "cell_m": 0.25, "all_flagged": 0 }
+    },
+    { "job": "9e62fd60", "excluded": "no coverage/cameras" },
+    {
+      "job": "a6261a0c",
+      "cameras": 249,
+      "sample_gaussians": 64716,
+      "voxels": 43,
+      "evaluated_voxels": 43,
+      "keep_voxels": 0,
+      "train": {
+        "gaussians": 200000,
+        "trainFrames": 249,
+        "valFrames": 0,
+        "trainSeconds": 2903.835892,
+        "metricsSplit": "unavailable: all frames trained",
+        "holdoutError": "off",
+        "shDegree": 3
+      },
+      "quality": {
+        "keep": 1,
+        "context": 2,
+        "drop": 199997,
+        "keepPct": 0.0,
+        "demotedByHeldOut": null,
+        "keepVerified": null
+      },
+      "structural_rule_tier_agreement": 1.0,
+      "geometry_keep_demotion_rate": 0.0,
+      "geometry_medians": {
+        "views": 249.0,
+        "spread": 1.6957206643189418,
+        "distinct15": 1.0,
+        "fisher": 14.775322428135095,
+        "hairs": 0.07142857142857142,
+        "hairs_resolution": 0.07142857142857142,
+        "fisher_resolution": 11.067438077132852,
+        "min_distance": 0.4022317196836284,
+        "median_distance": 0.40605776460907184,
+        "incidence": 0.8026633539231802,
+        "best_mm_px": 0.648983515469294,
+        "hemisphere_coverage": 0.07142857142857142
+      },
+      "accuracy_cells": { "sampled": 5, "flagged": 0, "cell_m": 0.25, "all_flagged": 0 }
+    },
+    {
+      "job": "c9357a92",
+      "cameras": 724,
+      "sample_gaussians": 149276,
+      "voxels": 14631,
+      "evaluated_voxels": 1000,
+      "keep_voxels": 167,
+      "train": {
+        "gaussians": 5626152,
+        "trainFrames": 724,
+        "valFrames": 0,
+        "trainSeconds": 3666.549723,
+        "metricsSplit": "unavailable: all frames trained",
+        "holdoutError": "off",
+        "shDegree": 3
+      },
+      "quality": {
+        "keep": 2347651,
+        "context": 205424,
+        "drop": 3073077,
+        "keepPct": 59.7,
+        "demotedByHeldOut": null,
+        "keepVerified": null
+      },
+      "structural_rule_tier_agreement": 1.0,
+      "geometry_keep_demotion_rate": 0.0,
+      "geometry_medians": {
+        "views": 162.0,
+        "spread": 17.93599496054812,
+        "distinct15": 2.0,
+        "fisher": 5.242603851864159,
+        "hairs": 0.14285714285714285,
+        "hairs_resolution": 0.03323099978880664,
+        "fisher_resolution": 4.073406080277707,
+        "min_distance": 3.1903890571832476,
+        "median_distance": 3.4664921953099603,
+        "incidence": 0.49738861252228816,
+        "best_mm_px": 6.909574973086072,
+        "hemisphere_coverage": 0.14285714285714285
+      },
+      "accuracy_cells": { "sampled": 835, "flagged": 0, "cell_m": 0.25, "all_flagged": 0 }
+    },
+    {
+      "job": "d535bf21",
+      "cameras": 1060,
+      "sample_gaussians": 148940,
+      "voxels": 1795,
+      "evaluated_voxels": 1000,
+      "keep_voxels": 0,
+      "train": {
+        "gaussians": 3760398,
+        "trainFrames": 1060,
+        "valFrames": 0,
+        "trainSeconds": 3828.620692,
+        "metricsSplit": "unavailable: all frames trained",
+        "holdoutError": "off",
+        "shDegree": 3
+      },
+      "quality": {
+        "keep": 2304,
+        "context": 528613,
+        "drop": 3229481,
+        "keepPct": 0.5,
+        "demotedByHeldOut": null,
+        "keepVerified": null
+      },
+      "structural_rule_tier_agreement": 1.0,
+      "geometry_keep_demotion_rate": 0.0,
+      "geometry_medians": {
+        "views": 913.0,
+        "spread": 4.38095800771985,
+        "distinct15": 1.0,
+        "fisher": 10.401134151665655,
+        "hairs": 0.07142857142857142,
+        "hairs_resolution": 0.07142857142857142,
+        "fisher_resolution": 10.236940913691084,
+        "min_distance": 1.6900252800400608,
+        "median_distance": 1.7287807203913355,
+        "incidence": 0.8212860668331381,
+        "best_mm_px": 2.896359581004959,
+        "hemisphere_coverage": 0.07142857142857142
+      },
+      "accuracy_cells": { "sampled": 236, "flagged": 0, "cell_m": 0.25, "all_flagged": 0 }
+    },
+    {
+      "job": "ec644db5",
+      "cameras": 179,
+      "sample_gaussians": 149821,
+      "voxels": 19002,
+      "evaluated_voxels": 1000,
+      "keep_voxels": 156,
+      "train": {
+        "gaussians": 1388939,
+        "trainFrames": 156,
+        "valFrames": 23,
+        "trainSeconds": 2115.922389,
+        "metricsSplit": "val: every 8th frame",
+        "holdoutError": "ok",
+        "shDegree": 0
+      },
+      "quality": {
+        "keep": 978455,
+        "context": 106310,
+        "drop": 304174,
+        "keepPct": 69.2,
+        "demotedByHeldOut": 7815,
+        "keepVerified": 830096
+      },
+      "structural_rule_tier_agreement": 0.9943734030076194,
+      "geometry_keep_demotion_rate": 0.007923793687327,
+      "geometry_medians": {
+        "views": 63.0,
+        "spread": 21.730480967392516,
+        "distinct15": 2.0,
+        "fisher": 1.6160044155090312,
+        "hairs": 0.0972093466788892,
+        "hairs_resolution": 0.005960388759785318,
+        "fisher_resolution": 1.4704897710371059,
+        "min_distance": 6.492619091321858,
+        "median_distance": 6.918329756961164,
+        "incidence": 0.386251264935226,
+        "best_mm_px": 11.59900956753393,
+        "hemisphere_coverage": 0.14285714285714285
+      },
+      "accuracy_cells": {
+        "sampled": 925,
+        "flagged": 12,
+        "cell_m": 0.5,
+        "all_flagged": 20,
+        "no_geometry_reason": 14,
+        "eligible_flagged": 12
+      }
+    }
+  ],
+  "results": [
+    {
+      "job": "0bb8dd45",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "views",
+      "n": 1000,
+      "positive": 396,
+      "value": 0.7642526255936852,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": 396,
+      "value": 0.8377441634891966,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": 396,
+      "value": 0.7998423807612549,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": 396,
+      "value": 0.8636572680446852,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": 396,
+      "value": 0.7696564151448257,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": 396,
+      "value": 0.7939138905612415,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": 396,
+      "value": 0.8097657033915312,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "views",
+      "n": 1000,
+      "positive": 396,
+      "value": 0.7820840858920329,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": 396,
+      "value": 0.8825632149307646,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": 396,
+      "value": 0.8444691116462639,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": 396,
+      "value": 0.8917444310656231,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": 396,
+      "value": 0.7993134992307178,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": 396,
+      "value": 0.8330114054451803,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": 396,
+      "value": 0.8451735902067028,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "views",
+      "n": 1000,
+      "positive": 396,
+      "value": 0.7887254164158137,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": 396,
+      "value": 0.894942805538832,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": 396,
+      "value": 0.862407184427052,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": 396,
+      "value": 0.896151080339822,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": 396,
+      "value": 0.813798163756773,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": 396,
+      "value": 0.8452697504849823,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": 396,
+      "value": 0.8546474680580641,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "views",
+      "n": 928,
+      "positive": 508,
+      "value": 0.7173368953880765,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 928,
+      "positive": 508,
+      "value": 0.842205661792276,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 928,
+      "positive": 508,
+      "value": 0.8084505061867266,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 928,
+      "positive": 508,
+      "value": 0.8651996625421823,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 928,
+      "positive": 508,
+      "value": 0.7416713535808024,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 928,
+      "positive": 508,
+      "value": 0.7862087551556055,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 928,
+      "positive": 508,
+      "value": 0.807180352455943,
+      "metric": "auc"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "views",
+      "n": 1000,
+      "positive": null,
+      "value": -0.0830206139061555,
+      "metric": "spearman"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": null,
+      "value": -0.1369588696075517,
+      "metric": "spearman"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": null,
+      "value": -0.06755879110099534,
+      "metric": "spearman"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": null,
+      "value": -0.0682308413938583,
+      "metric": "spearman"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": null,
+      "value": -0.0765062149093617,
+      "metric": "spearman"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": -0.09383699314157029,
+      "metric": "spearman"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": -0.09230488307025025,
+      "metric": "spearman"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "views",
+      "n": 1000,
+      "positive": null,
+      "value": -0.021189158922688422,
+      "metric": "spearman"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": null,
+      "value": -0.0028163577495744015,
+      "metric": "spearman"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": null,
+      "value": -0.053870372166789825,
+      "metric": "spearman"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": null,
+      "value": -0.03612724293467338,
+      "metric": "spearman"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": null,
+      "value": -0.04630838810340969,
+      "metric": "spearman"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": -0.024739627685152685,
+      "metric": "spearman"
+    },
+    {
+      "job": "0bb8dd45",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": -0.03001324184491472,
+      "metric": "spearman"
+    },
+    {
+      "job": "71556411",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "views",
+      "n": 1000,
+      "positive": 175,
+      "value": 0.976935064935065,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": 175,
+      "value": 0.9863411255411255,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": 175,
+      "value": 0.9796640692640692,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": 175,
+      "value": 0.9857454545454546,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": 175,
+      "value": 0.9651532467532468,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": 175,
+      "value": 0.9681800865800866,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": 175,
+      "value": 0.9720034632034632,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "views",
+      "n": 1000,
+      "positive": 175,
+      "value": 0.9826943722943723,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": 175,
+      "value": 0.9838406926406926,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": 175,
+      "value": 0.9935549783549783,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": 175,
+      "value": 0.9948467532467532,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": 175,
+      "value": 0.9598753246753247,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": 175,
+      "value": 0.9499359307359307,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": 175,
+      "value": 0.9515567099567099,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "views",
+      "n": 1000,
+      "positive": 175,
+      "value": 0.9484848484848485,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": 175,
+      "value": 0.9802943722943723,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": 175,
+      "value": 0.9849974025974026,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": 175,
+      "value": 0.9841385281385281,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": 175,
+      "value": 0.9033835497835497,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": 175,
+      "value": 0.8864969696969697,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": 175,
+      "value": 0.8899047619047619,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_absent_no_geometry_reason",
+      "fov": 70,
+      "candidate": "views",
+      "n": 39,
+      "positive": 3,
+      "value": 0.5416666666666666,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_absent_no_geometry_reason",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 39,
+      "positive": 3,
+      "value": 0.6666666666666666,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_absent_no_geometry_reason",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 39,
+      "positive": 3,
+      "value": 0.6342592592592593,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_absent_no_geometry_reason",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 39,
+      "positive": 3,
+      "value": 0.6666666666666666,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_absent_no_geometry_reason",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 39,
+      "positive": 3,
+      "value": 0.6111111111111112,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_absent_no_geometry_reason",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 39,
+      "positive": 3,
+      "value": 0.6574074074074074,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_absent_no_geometry_reason",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 39,
+      "positive": 3,
+      "value": 0.6111111111111112,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_flag_absent",
+      "fov": 70,
+      "candidate": "views",
+      "n": 557,
+      "positive": 521,
+      "value": 0.01471529110684581,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_flag_absent",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 557,
+      "positive": 521,
+      "value": 0.021753039027511197,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_flag_absent",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 557,
+      "positive": 521,
+      "value": 0.015861590957560248,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_flag_absent",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 557,
+      "positive": 521,
+      "value": 0.016208146726380893,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_flag_absent",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 557,
+      "positive": 521,
+      "value": 0.025165280443591384,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_flag_absent",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 557,
+      "positive": 521,
+      "value": 0.027884410322030283,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_flag_absent",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 557,
+      "positive": 521,
+      "value": 0.02836425677116656,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_flag_absent",
+      "fov": 50,
+      "candidate": "views",
+      "n": 557,
+      "positive": 521,
+      "value": 0.01274258903817445,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_flag_absent",
+      "fov": 50,
+      "candidate": "spread",
+      "n": 557,
+      "positive": 521,
+      "value": 0.01418212838558328,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_flag_absent",
+      "fov": 50,
+      "candidate": "distinct15",
+      "n": 557,
+      "positive": 521,
+      "value": 0.013382384303689486,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_flag_absent",
+      "fov": 50,
+      "candidate": "fisher",
+      "n": 557,
+      "positive": 521,
+      "value": 0.01215611004478567,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_flag_absent",
+      "fov": 50,
+      "candidate": "hairs",
+      "n": 557,
+      "positive": 521,
+      "value": 0.017061207080400938,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_flag_absent",
+      "fov": 50,
+      "candidate": "hairs_resolution",
+      "n": 557,
+      "positive": 521,
+      "value": 0.01583493282149712,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_flag_absent",
+      "fov": 50,
+      "candidate": "fisher_resolution",
+      "n": 557,
+      "positive": 521,
+      "value": 0.015568351460865857,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_flag_absent",
+      "fov": 90,
+      "candidate": "views",
+      "n": 557,
+      "positive": 521,
+      "value": 0.03358925143953935,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_flag_absent",
+      "fov": 90,
+      "candidate": "spread",
+      "n": 557,
+      "positive": 521,
+      "value": 0.02761782896139902,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_flag_absent",
+      "fov": 90,
+      "candidate": "distinct15",
+      "n": 557,
+      "positive": 521,
+      "value": 0.02473875026658136,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_flag_absent",
+      "fov": 90,
+      "candidate": "fisher",
+      "n": 557,
+      "positive": 521,
+      "value": 0.02276604819791,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_flag_absent",
+      "fov": 90,
+      "candidate": "hairs",
+      "n": 557,
+      "positive": 521,
+      "value": 0.06158029430582214,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_flag_absent",
+      "fov": 90,
+      "candidate": "hairs_resolution",
+      "n": 557,
+      "positive": 521,
+      "value": 0.05923437833226701,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "accuracy_flag_absent",
+      "fov": 90,
+      "candidate": "fisher_resolution",
+      "n": 557,
+      "positive": 521,
+      "value": 0.05747494135210066,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "views",
+      "n": 424,
+      "positive": 361,
+      "value": 0.7935408697181551,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 424,
+      "positive": 361,
+      "value": 0.7931231587741283,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 424,
+      "positive": 361,
+      "value": 0.7531108472936727,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 424,
+      "positive": 361,
+      "value": 0.8381919711559601,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 424,
+      "positive": 361,
+      "value": 0.7746779228773688,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 424,
+      "positive": 361,
+      "value": 0.7776898386316669,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 424,
+      "positive": 361,
+      "value": 0.7701710416391857,
+      "metric": "auc"
+    },
+    {
+      "job": "71556411",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "views",
+      "n": 1000,
+      "positive": null,
+      "value": -0.014167834911214839,
+      "metric": "spearman"
+    },
+    {
+      "job": "71556411",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": null,
+      "value": -0.174698494132151,
+      "metric": "spearman"
+    },
+    {
+      "job": "71556411",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": null,
+      "value": -0.154844997001659,
+      "metric": "spearman"
+    },
+    {
+      "job": "71556411",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": null,
+      "value": -0.16318601890601905,
+      "metric": "spearman"
+    },
+    {
+      "job": "71556411",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": null,
+      "value": -0.013856984521672165,
+      "metric": "spearman"
+    },
+    {
+      "job": "71556411",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": -0.019826254292553157,
+      "metric": "spearman"
+    },
+    {
+      "job": "71556411",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": -0.02704502979318077,
+      "metric": "spearman"
+    },
+    {
+      "job": "71556411",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "views",
+      "n": 1000,
+      "positive": null,
+      "value": 0.10450457118025185,
+      "metric": "spearman"
+    },
+    {
+      "job": "71556411",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": null,
+      "value": -0.030935888174966234,
+      "metric": "spearman"
+    },
+    {
+      "job": "71556411",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": null,
+      "value": 0.029042197849021286,
+      "metric": "spearman"
+    },
+    {
+      "job": "71556411",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": null,
+      "value": -0.02752855438029724,
+      "metric": "spearman"
+    },
+    {
+      "job": "71556411",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": null,
+      "value": -0.023582316700205937,
+      "metric": "spearman"
+    },
+    {
+      "job": "71556411",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": -0.06894045031358731,
+      "metric": "spearman"
+    },
+    {
+      "job": "71556411",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": -0.06099084287971432,
+      "metric": "spearman"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "views",
+      "n": 1000,
+      "positive": 893,
+      "value": 0.866197109397076,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": 893,
+      "value": 0.7772289144017331,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": 893,
+      "value": 0.8173540831597785,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": 893,
+      "value": 0.8267522056284079,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": 893,
+      "value": 0.7468681646450587,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": 893,
+      "value": 0.7788092223001329,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": 893,
+      "value": 0.793952967525196,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "views",
+      "n": 1000,
+      "positive": 893,
+      "value": 0.8155278333036807,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": 893,
+      "value": 0.7976891921591611,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": 893,
+      "value": 0.8143923140521816,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": 893,
+      "value": 0.8060616843361137,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": 893,
+      "value": 0.7868886772508922,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": 893,
+      "value": 0.8077361827715043,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": 893,
+      "value": 0.8147795418153656,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "views",
+      "n": 1000,
+      "positive": 893,
+      "value": 0.805009890006384,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": 893,
+      "value": 0.747328651714791,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": 893,
+      "value": 0.8067995102092076,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": 893,
+      "value": 0.755062741363251,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": 893,
+      "value": 0.7888876097581397,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": 893,
+      "value": 0.7990392565226947,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": 893,
+      "value": 0.8044709108224927,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "views",
+      "n": 184,
+      "positive": 180,
+      "value": 0.8027777777777778,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 184,
+      "positive": 180,
+      "value": 0.8791666666666667,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 184,
+      "positive": 180,
+      "value": 0.8541666666666666,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 184,
+      "positive": 180,
+      "value": 0.8805555555555555,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 184,
+      "positive": 180,
+      "value": 0.7819444444444444,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 184,
+      "positive": 180,
+      "value": 0.8097222222222222,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 184,
+      "positive": 180,
+      "value": 0.8041666666666667,
+      "metric": "auc"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "views",
+      "n": 1000,
+      "positive": null,
+      "value": -0.13328159607215698,
+      "metric": "spearman"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": null,
+      "value": -0.1437472273707124,
+      "metric": "spearman"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": null,
+      "value": -0.1424895439961389,
+      "metric": "spearman"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": null,
+      "value": -0.17579089106537849,
+      "metric": "spearman"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": null,
+      "value": -0.1172602067520194,
+      "metric": "spearman"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": -0.15203352540683174,
+      "metric": "spearman"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": -0.15707059625755815,
+      "metric": "spearman"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "views",
+      "n": 1000,
+      "positive": null,
+      "value": 0.08040973121762801,
+      "metric": "spearman"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": null,
+      "value": 0.09962063812511263,
+      "metric": "spearman"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": null,
+      "value": 0.08258590264075806,
+      "metric": "spearman"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": null,
+      "value": 0.10885858201599635,
+      "metric": "spearman"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": null,
+      "value": 0.06668698258947066,
+      "metric": "spearman"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": 0.0503388278221937,
+      "metric": "spearman"
+    },
+    {
+      "job": "8b74e626",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": 0.053069709957673766,
+      "metric": "spearman"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "views",
+      "n": 43,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "spread",
+      "n": 43,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "distinct15",
+      "n": 43,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "fisher",
+      "n": 43,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "hairs",
+      "n": 43,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "hairs_resolution",
+      "n": 43,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "fisher_resolution",
+      "n": 43,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "views",
+      "n": 43,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 43,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 43,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 43,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 43,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 43,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 43,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "views",
+      "n": 43,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "spread",
+      "n": 43,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "distinct15",
+      "n": 43,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "fisher",
+      "n": 43,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "hairs",
+      "n": 43,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "hairs_resolution",
+      "n": 43,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "fisher_resolution",
+      "n": 43,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "views",
+      "n": 4,
+      "positive": 4,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 4,
+      "positive": 4,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 4,
+      "positive": 4,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 4,
+      "positive": 4,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 4,
+      "positive": 4,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 4,
+      "positive": 4,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 4,
+      "positive": 4,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "views",
+      "n": 1000,
+      "positive": null,
+      "value": 0.06391974969703962,
+      "metric": "spearman"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": null,
+      "value": 0.12978747170692892,
+      "metric": "spearman"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": null,
+      "value": 0.09344349823933869,
+      "metric": "spearman"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": null,
+      "value": 0.11848284185724925,
+      "metric": "spearman"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": null,
+      "value": 0.03849930908028329,
+      "metric": "spearman"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": 0.04036460602396449,
+      "metric": "spearman"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": 0.09980514717144538,
+      "metric": "spearman"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "views",
+      "n": 1000,
+      "positive": null,
+      "value": 0.03373828673246826,
+      "metric": "spearman"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": null,
+      "value": -0.17866345686751636,
+      "metric": "spearman"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": null,
+      "value": 0.038599946692731736,
+      "metric": "spearman"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": null,
+      "value": -0.20599642012939232,
+      "metric": "spearman"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": null,
+      "value": 0.014515356561957609,
+      "metric": "spearman"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": 0.012485843452138693,
+      "metric": "spearman"
+    },
+    {
+      "job": "a6261a0c",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": -0.19099496097334365,
+      "metric": "spearman"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "views",
+      "n": 1000,
+      "positive": 167,
+      "value": 0.7729726621187397,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": 167,
+      "value": 0.8685294477072266,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": 167,
+      "value": 0.8377662442222398,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": 167,
+      "value": 0.8804695530906974,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": 167,
+      "value": 0.7954007950485583,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": 167,
+      "value": 0.8315445938854584,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": 167,
+      "value": 0.8431252740617204,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "views",
+      "n": 1000,
+      "positive": 167,
+      "value": 0.8337550589097915,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": 167,
+      "value": 0.9256564901409665,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": 167,
+      "value": 0.9014887392082581,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": 167,
+      "value": 0.9150893890490328,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": 167,
+      "value": 0.8451991575073143,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": 167,
+      "value": 0.863925210802884,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": 167,
+      "value": 0.8756532553141017,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "views",
+      "n": 1000,
+      "positive": 167,
+      "value": 0.8567942146918648,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": 167,
+      "value": 0.936583016440109,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": 167,
+      "value": 0.9225366793423957,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": 167,
+      "value": 0.9333266240627988,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": 167,
+      "value": 0.878205174285283,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": 167,
+      "value": 0.8806564541984458,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": 167,
+      "value": 0.8923880929617356,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "views",
+      "n": 717,
+      "positive": 510,
+      "value": 0.6932130340058729,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 717,
+      "positive": 510,
+      "value": 0.7477503078526097,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 717,
+      "positive": 510,
+      "value": 0.651889741403808,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 717,
+      "positive": 510,
+      "value": 0.7615894667045562,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 717,
+      "positive": 510,
+      "value": 0.6170029364402766,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 717,
+      "positive": 510,
+      "value": 0.6648858577247324,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 717,
+      "positive": 510,
+      "value": 0.6870038836790755,
+      "metric": "auc"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "views",
+      "n": 1000,
+      "positive": null,
+      "value": -0.047215769850812196,
+      "metric": "spearman"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": null,
+      "value": -0.04444610448681157,
+      "metric": "spearman"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": null,
+      "value": -0.036939917037765134,
+      "metric": "spearman"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": null,
+      "value": -0.03234295155202528,
+      "metric": "spearman"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": null,
+      "value": -0.05102328652253753,
+      "metric": "spearman"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": -0.059401357798976914,
+      "metric": "spearman"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": -0.04809540928604996,
+      "metric": "spearman"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "views",
+      "n": 1000,
+      "positive": null,
+      "value": -0.019369432572560373,
+      "metric": "spearman"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": null,
+      "value": -0.16844964565091067,
+      "metric": "spearman"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": null,
+      "value": -0.04973510244050905,
+      "metric": "spearman"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": null,
+      "value": -0.0739285135605326,
+      "metric": "spearman"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": null,
+      "value": -0.012114554756182663,
+      "metric": "spearman"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": -0.020759328195300457,
+      "metric": "spearman"
+    },
+    {
+      "job": "c9357a92",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": -0.029713462425521562,
+      "metric": "spearman"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "views",
+      "n": 1000,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "views",
+      "n": 1000,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "views",
+      "n": 1000,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": 0,
+      "value": null,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "views",
+      "n": 66,
+      "positive": 44,
+      "value": 0.4390495867768595,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 66,
+      "positive": 44,
+      "value": 0.8047520661157025,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 66,
+      "positive": 44,
+      "value": 0.5113636363636364,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 66,
+      "positive": 44,
+      "value": 0.8378099173553719,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 66,
+      "positive": 44,
+      "value": 0.45764462809917356,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 66,
+      "positive": 44,
+      "value": 0.48760330578512395,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 66,
+      "positive": 44,
+      "value": 0.6446280991735537,
+      "metric": "auc"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "views",
+      "n": 1000,
+      "positive": null,
+      "value": -0.1305701708918875,
+      "metric": "spearman"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": null,
+      "value": -0.1485271008185776,
+      "metric": "spearman"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": null,
+      "value": -0.21724831355921517,
+      "metric": "spearman"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": null,
+      "value": -0.05169253500723757,
+      "metric": "spearman"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": null,
+      "value": -0.02699083977408379,
+      "metric": "spearman"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": -0.0268579528792031,
+      "metric": "spearman"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": -0.15534480107823148,
+      "metric": "spearman"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "views",
+      "n": 1000,
+      "positive": null,
+      "value": 0.05670398729144177,
+      "metric": "spearman"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": null,
+      "value": 0.015111107850694985,
+      "metric": "spearman"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": null,
+      "value": -0.0361767703931327,
+      "metric": "spearman"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": null,
+      "value": -0.07053867612984413,
+      "metric": "spearman"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": null,
+      "value": 0.11839608353221724,
+      "metric": "spearman"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": 0.11838969074763131,
+      "metric": "spearman"
+    },
+    {
+      "job": "d535bf21",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": 0.022613868676472575,
+      "metric": "spearman"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "views",
+      "n": 1000,
+      "positive": 156,
+      "value": 0.9684120184712601,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": 156,
+      "value": 0.9824477457771297,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": 156,
+      "value": 0.9768729493255559,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": 156,
+      "value": 0.9896251063312674,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": 156,
+      "value": 0.9313441791226151,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": 156,
+      "value": 0.9490369425203549,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "tier_keep_circular",
+      "fov": 50,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": 156,
+      "value": 0.9561459472596914,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "views",
+      "n": 1000,
+      "positive": 156,
+      "value": 0.9884478672985783,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": 156,
+      "value": 0.9898377688662049,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": 156,
+      "value": 0.9918428727670434,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": 156,
+      "value": 0.9916605905942398,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": 156,
+      "value": 0.9678803621339166,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": 156,
+      "value": 0.9622751853202091,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "tier_keep_circular",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": 156,
+      "value": 0.9690727913476729,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "views",
+      "n": 1000,
+      "positive": 156,
+      "value": 0.98853900838498,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": 156,
+      "value": 0.9856908494349252,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": 156,
+      "value": 0.9870237878235508,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": 156,
+      "value": 0.9841186656944951,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": 156,
+      "value": 0.9602245108761697,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": 156,
+      "value": 0.9577637015433224,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "tier_keep_circular",
+      "fov": 90,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": 156,
+      "value": 0.9645764977518532,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_absent_no_geometry_reason",
+      "fov": 70,
+      "candidate": "views",
+      "n": 14,
+      "positive": 2,
+      "value": 0.3125,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_absent_no_geometry_reason",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 14,
+      "positive": 2,
+      "value": 0.3333333333333333,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_absent_no_geometry_reason",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 14,
+      "positive": 2,
+      "value": 0.25,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_absent_no_geometry_reason",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 14,
+      "positive": 2,
+      "value": 0.2916666666666667,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_absent_no_geometry_reason",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 14,
+      "positive": 2,
+      "value": 0.20833333333333334,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_absent_no_geometry_reason",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 14,
+      "positive": 2,
+      "value": 0.3333333333333333,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_absent_no_geometry_reason",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 14,
+      "positive": 2,
+      "value": 0.25,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_flag_absent",
+      "fov": 70,
+      "candidate": "views",
+      "n": 925,
+      "positive": 913,
+      "value": 0.004107338444687842,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_flag_absent",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 925,
+      "positive": 913,
+      "value": 0.0036509675063891934,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_flag_absent",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 925,
+      "positive": 913,
+      "value": 0.0032858707557502738,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_flag_absent",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 925,
+      "positive": 913,
+      "value": 0.004016064257028112,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_flag_absent",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 925,
+      "positive": 913,
+      "value": 0.014512595837897043,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_flag_absent",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 925,
+      "positive": 913,
+      "value": 0.008579773640014604,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_flag_absent",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 925,
+      "positive": 913,
+      "value": 0.007301935012778387,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_flag_absent",
+      "fov": 50,
+      "candidate": "views",
+      "n": 925,
+      "positive": 913,
+      "value": 0.011409273457466229,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_flag_absent",
+      "fov": 50,
+      "candidate": "spread",
+      "n": 925,
+      "positive": 913,
+      "value": 0.0034684191310697336,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_flag_absent",
+      "fov": 50,
+      "candidate": "distinct15",
+      "n": 925,
+      "positive": 913,
+      "value": 0.004107338444687842,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_flag_absent",
+      "fov": 50,
+      "candidate": "fisher",
+      "n": 925,
+      "positive": 913,
+      "value": 0.003742241694048923,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_flag_absent",
+      "fov": 50,
+      "candidate": "hairs",
+      "n": 925,
+      "positive": 913,
+      "value": 0.018437385907265427,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_flag_absent",
+      "fov": 50,
+      "candidate": "hairs_resolution",
+      "n": 925,
+      "positive": 913,
+      "value": 0.007210660825118656,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_flag_absent",
+      "fov": 50,
+      "candidate": "fisher_resolution",
+      "n": 925,
+      "positive": 913,
+      "value": 0.006845564074479737,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_flag_absent",
+      "fov": 90,
+      "candidate": "views",
+      "n": 925,
+      "positive": 913,
+      "value": 0.008214676889375685,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_flag_absent",
+      "fov": 90,
+      "candidate": "spread",
+      "n": 925,
+      "positive": 913,
+      "value": 0.0045637093829864915,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_flag_absent",
+      "fov": 90,
+      "candidate": "distinct15",
+      "n": 925,
+      "positive": 913,
+      "value": 0.006206644760861628,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_flag_absent",
+      "fov": 90,
+      "candidate": "fisher",
+      "n": 925,
+      "positive": 913,
+      "value": 0.008579773640014604,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_flag_absent",
+      "fov": 90,
+      "candidate": "hairs",
+      "n": 925,
+      "positive": 913,
+      "value": 0.024461482292807594,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_flag_absent",
+      "fov": 90,
+      "candidate": "hairs_resolution",
+      "n": 925,
+      "positive": 913,
+      "value": 0.01615553121577218,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "accuracy_flag_absent",
+      "fov": 90,
+      "candidate": "fisher_resolution",
+      "n": 925,
+      "positive": 913,
+      "value": 0.015060240963855422,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "views",
+      "n": 841,
+      "positive": 528,
+      "value": 0.682075346112886,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 841,
+      "positive": 528,
+      "value": 0.7482270790976862,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 841,
+      "positive": 528,
+      "value": 0.7035379756026721,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 841,
+      "positive": 528,
+      "value": 0.7940083744796205,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 841,
+      "positive": 528,
+      "value": 0.6219110030012586,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 841,
+      "positive": 528,
+      "value": 0.6956566463355601,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "surface_present_proxy",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 841,
+      "positive": 528,
+      "value": 0.723188353180366,
+      "metric": "auc"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "views",
+      "n": 1000,
+      "positive": null,
+      "value": -0.0009548631853693896,
+      "metric": "spearman"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": null,
+      "value": 0.0653501972773682,
+      "metric": "spearman"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": null,
+      "value": 0.06837866331108737,
+      "metric": "spearman"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": null,
+      "value": 0.05989365249133602,
+      "metric": "spearman"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": null,
+      "value": 0.01957808183366042,
+      "metric": "spearman"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": -0.03091158561744031,
+      "metric": "spearman"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "published_opacity",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": -0.018636469048628944,
+      "metric": "spearman"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "views",
+      "n": 1000,
+      "positive": null,
+      "value": 0.0415927282916962,
+      "metric": "spearman"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "spread",
+      "n": 1000,
+      "positive": null,
+      "value": 0.10829857975774626,
+      "metric": "spearman"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "distinct15",
+      "n": 1000,
+      "positive": null,
+      "value": 0.03321811727618351,
+      "metric": "spearman"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "fisher",
+      "n": 1000,
+      "positive": null,
+      "value": 0.017900508729834144,
+      "metric": "spearman"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "hairs",
+      "n": 1000,
+      "positive": null,
+      "value": -0.04878445380497205,
+      "metric": "spearman"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "hairs_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": -0.07205416697640352,
+      "metric": "spearman"
+    },
+    {
+      "job": "ec644db5",
+      "outcome": "published_log_anisotropy",
+      "fov": 70,
+      "candidate": "fisher_resolution",
+      "n": 1000,
+      "positive": null,
+      "value": -0.07506813666964346,
+      "metric": "spearman"
+    }
+  ],
+  "leave_one_job_out": [
+    { "job": "0bb8dd45", "candidate": "views", "n": 1000, "auc": 0.2179159141079671 },
+    { "job": "0bb8dd45", "candidate": "spread", "n": 1000, "auc": 0.8825632149307646 },
+    { "job": "0bb8dd45", "candidate": "distinct15", "n": 1000, "auc": 0.8444691116462639 },
+    { "job": "0bb8dd45", "candidate": "fisher", "n": 1000, "auc": 0.8917444310656231 },
+    { "job": "0bb8dd45", "candidate": "hairs", "n": 1000, "auc": 0.7993134992307178 },
+    { "job": "0bb8dd45", "candidate": "hairs_resolution", "n": 1000, "auc": 0.8330114054451803 },
+    { "job": "0bb8dd45", "candidate": "fisher_resolution", "n": 1000, "auc": 0.8451735902067028 },
+    {
+      "job": "0bb8dd45",
+      "candidate": "views+spread+distinct15+fisher+hairs+hairs_resolution+fisher_resolution",
+      "n": 1000,
+      "auc": 0.8807487122884474
+    },
+    { "job": "71556411", "candidate": "views", "n": 1000, "auc": 0.9826943722943723 },
+    { "job": "71556411", "candidate": "spread", "n": 1000, "auc": 0.9838406926406926 },
+    { "job": "71556411", "candidate": "distinct15", "n": 1000, "auc": 0.9935549783549783 },
+    { "job": "71556411", "candidate": "fisher", "n": 1000, "auc": 0.9948467532467532 },
+    { "job": "71556411", "candidate": "hairs", "n": 1000, "auc": 0.9598753246753247 },
+    { "job": "71556411", "candidate": "hairs_resolution", "n": 1000, "auc": 0.9499359307359307 },
+    { "job": "71556411", "candidate": "fisher_resolution", "n": 1000, "auc": 0.9515567099567099 },
+    {
+      "job": "71556411",
+      "candidate": "views+spread+distinct15+fisher+hairs+hairs_resolution+fisher_resolution",
+      "n": 1000,
+      "auc": 0.9878372294372294
+    },
+    { "job": "8b74e626", "candidate": "views", "n": 1000, "auc": 0.8155278333036807 },
+    { "job": "8b74e626", "candidate": "spread", "n": 1000, "auc": 0.7976891921591611 },
+    { "job": "8b74e626", "candidate": "distinct15", "n": 1000, "auc": 0.8143923140521816 },
+    { "job": "8b74e626", "candidate": "fisher", "n": 1000, "auc": 0.8060616843361137 },
+    { "job": "8b74e626", "candidate": "hairs", "n": 1000, "auc": 0.7868886772508922 },
+    { "job": "8b74e626", "candidate": "hairs_resolution", "n": 1000, "auc": 0.8077361827715043 },
+    { "job": "8b74e626", "candidate": "fisher_resolution", "n": 1000, "auc": 0.8147795418153656 },
+    {
+      "job": "8b74e626",
+      "candidate": "views+spread+distinct15+fisher+hairs+hairs_resolution+fisher_resolution",
+      "n": 1000,
+      "auc": 0.8133038900691777
+    },
+    { "job": "a6261a0c", "candidate": "views", "n": 43, "auc": null },
+    { "job": "a6261a0c", "candidate": "spread", "n": 43, "auc": null },
+    { "job": "a6261a0c", "candidate": "distinct15", "n": 43, "auc": null },
+    { "job": "a6261a0c", "candidate": "fisher", "n": 43, "auc": null },
+    { "job": "a6261a0c", "candidate": "hairs", "n": 43, "auc": null },
+    { "job": "a6261a0c", "candidate": "hairs_resolution", "n": 43, "auc": null },
+    { "job": "a6261a0c", "candidate": "fisher_resolution", "n": 43, "auc": null },
+    {
+      "job": "a6261a0c",
+      "candidate": "views+spread+distinct15+fisher+hairs+hairs_resolution+fisher_resolution",
+      "n": 43,
+      "auc": null
+    },
+    { "job": "c9357a92", "candidate": "views", "n": 1000, "auc": 0.8337550589097915 },
+    { "job": "c9357a92", "candidate": "spread", "n": 1000, "auc": 0.9256564901409665 },
+    { "job": "c9357a92", "candidate": "distinct15", "n": 1000, "auc": 0.9014887392082581 },
+    { "job": "c9357a92", "candidate": "fisher", "n": 1000, "auc": 0.9150893890490328 },
+    { "job": "c9357a92", "candidate": "hairs", "n": 1000, "auc": 0.8451991575073143 },
+    { "job": "c9357a92", "candidate": "hairs_resolution", "n": 1000, "auc": 0.863925210802884 },
+    { "job": "c9357a92", "candidate": "fisher_resolution", "n": 1000, "auc": 0.8756532553141017 },
+    {
+      "job": "c9357a92",
+      "candidate": "views+spread+distinct15+fisher+hairs+hairs_resolution+fisher_resolution",
+      "n": 1000,
+      "auc": 0.922177254135187
+    },
+    { "job": "d535bf21", "candidate": "views", "n": 1000, "auc": null },
+    { "job": "d535bf21", "candidate": "spread", "n": 1000, "auc": null },
+    { "job": "d535bf21", "candidate": "distinct15", "n": 1000, "auc": null },
+    { "job": "d535bf21", "candidate": "fisher", "n": 1000, "auc": null },
+    { "job": "d535bf21", "candidate": "hairs", "n": 1000, "auc": null },
+    { "job": "d535bf21", "candidate": "hairs_resolution", "n": 1000, "auc": null },
+    { "job": "d535bf21", "candidate": "fisher_resolution", "n": 1000, "auc": null },
+    {
+      "job": "d535bf21",
+      "candidate": "views+spread+distinct15+fisher+hairs+hairs_resolution+fisher_resolution",
+      "n": 1000,
+      "auc": null
+    },
+    { "job": "ec644db5", "candidate": "views", "n": 1000, "auc": 0.9884478672985783 },
+    { "job": "ec644db5", "candidate": "spread", "n": 1000, "auc": 0.9898377688662049 },
+    { "job": "ec644db5", "candidate": "distinct15", "n": 1000, "auc": 0.9918428727670434 },
+    { "job": "ec644db5", "candidate": "fisher", "n": 1000, "auc": 0.9916605905942398 },
+    { "job": "ec644db5", "candidate": "hairs", "n": 1000, "auc": 0.9678803621339166 },
+    { "job": "ec644db5", "candidate": "hairs_resolution", "n": 1000, "auc": 0.9622751853202091 },
+    { "job": "ec644db5", "candidate": "fisher_resolution", "n": 1000, "auc": 0.9690727913476729 },
+    {
+      "job": "ec644db5",
+      "candidate": "views+spread+distinct15+fisher+hairs+hairs_resolution+fisher_resolution",
+      "n": 1000,
+      "auc": 0.9905289221047515
+    }
+  ],
+  "runtime_seconds": 63.83,
+  "peak_rss_mib": 183.0
+}
