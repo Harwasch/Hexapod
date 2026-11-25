@@ -7,7 +7,9 @@ import Testing
   #expect(settings.averageBitRate * 48 / 8 == 161_740_800)
   #expect(CaptureVideoSettings(width: 1440, height: 1920).averageBitRate == settings.averageBitRate)
   #expect(CaptureVideoSettings(width: 1280, height: 720).averageBitRate == 8_985_600)
-  #expect(CaptureVideoSettings(width: 3840, height: 2160).averageBitRate == 30_000_000)
+  let fourK = CaptureVideoSettings(width: 3840, height: 2160)
+  #expect(fourK.averageBitRate == 55_000_000)
+  #expect(fourK.averageBitRate * 48 / 8 == 330_000_000)
 }
 
 #if canImport(AVFoundation)
