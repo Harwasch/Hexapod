@@ -178,6 +178,63 @@ def train(tag: str, arm: str, revision: str) -> dict[str, Any]:
     return result
 
 
+@app.function(
+    image=gpu_image,
+    gpu="L40S",
+    cpu=(4, 4),
+    memory=16384,
+    timeout=3600,
+    volumes={"/bench": volume},
+    max_containers=1,
+    retries=0,
+    single_use_containers=True,
+)
+def evaluate_existing(tag: str, arm: str) -> None:
+    """Re-run run_training's external test and renders on an already trained arm.
+
+    The first v17 arm trained fully, then lost its evaluation to a missing plan key.
+    This repeats that exact evaluate.py call on its saved PLYs; it never retrains.
+    """
+    import subprocess
+    import tempfile
+
+    import training
+    from experiments.bench.recipe import train_params
+
+    volume.reload()
+    root = Path("/bench/arkit") / tag / arm
+    scene, run = root / "scene", root / "run"
+    if (run / "test.json").exists() or not (run / "trained.ply").is_file():
+        raise ValueError("arm already evaluated or not trained")
+    params = train_params("full", {"train": arm_params(arm)})
+    with tempfile.TemporaryDirectory() as temporary:
+        data = training.build_dataset(
+            scene / "frames",
+            scene / "poses",
+            Path(temporary) / "evaluation",
+            max_side=params.get("train_max_side"),
+        )
+        command = [
+            training.trainer_python(None),
+            str(Path(shared.PIPELINE_DIR) / "experiments" / "bench" / "evaluate.py"),
+            "--data", str(data),
+            "--ply", str(run / "trained.ply"),
+            "--trainer", str(training.trainer_script(params.get("trainer"))),
+            "--split", str(scene / "split.json"),
+            "--scene", str(scene),
+            "--out", str(run / "test.json"),
+            "--degree", str(params.get("ship_sh_degree", 0)),
+            "--renders", "16",
+            "--render-dir", str(run / "renders"),
+        ]  # fmt: skip
+        if (run / "full_sh.ply").is_file():
+            command += ["--raw-ply", str(run / "full_sh.ply")]
+        if params.get("antialiased"):
+            command.append("--antialiased")
+        subprocess.run(command, check=True, timeout=3300)  # noqa: S603
+    volume.commit()
+
+
 @app.local_entrypoint()
 def main(
     bundle_path: str,
