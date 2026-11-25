@@ -9,7 +9,7 @@ struct BridgeTests {
       forResource: "messages", withExtension: "json", subdirectory: "Fixtures")!
     let data = try Data(contentsOf: url)
     let messages = try JSONDecoder().decode([BridgeMessage].self, from: data)
-    #expect(messages.count == 8)
+    #expect(messages.count == 9)
     let encoded = try JSONEncoder().encode(messages)
     #expect(try JSONDecoder().decode([BridgeMessage].self, from: encoded) == messages)
     let original = try JSONSerialization.jsonObject(with: data) as! NSArray

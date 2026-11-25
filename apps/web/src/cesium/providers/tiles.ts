@@ -1,3 +1,4 @@
+import { SCAN_DETAIL_CONFIG } from "@/lib/detail";
 import {
   Cesium3DTileset,
   MVTDataProvider,
@@ -322,9 +323,9 @@ export function is3DSource(source: Layer["source"]): boolean {
 
 /** One visible scan in the phone embed. Cache targets are per scan, not a process RAM cap. */
 export const EMBED_TILE_OPTIONS = {
-  maximumScreenSpaceError: 8,
-  cacheBytes: 64 * MB,
-  maximumCacheOverflowBytes: 16 * MB,
+  maximumScreenSpaceError: SCAN_DETAIL_CONFIG.embed.maximumScreenSpaceError,
+  cacheBytes: SCAN_DETAIL_CONFIG.embed.cacheBytes,
+  maximumCacheOverflowBytes: SCAN_DETAIL_CONFIG.embed.maximumCacheOverflowBytes,
   preloadWhenHidden: false,
   preloadFlightDestinations: false,
   enableCollision: false,
@@ -332,6 +333,9 @@ export const EMBED_TILE_OPTIONS = {
 } satisfies Cesium3DTileset.ConstructorOptions;
 
 /** Same URL/3D Tiles path as web assets; KHR Gaussian content is decoded by Cesium itself. */
-export function createEmbedScanTileset(url: string): Promise<TilesetType> {
-  return tilesetAtUrl(url, { ...COMMON, ...EMBED_TILE_OPTIONS }, undefined);
+export function createEmbedScanTileset(
+  url: string,
+  options: Cesium3DTileset.ConstructorOptions = EMBED_TILE_OPTIONS,
+): Promise<TilesetType> {
+  return tilesetAtUrl(url, { ...COMMON, ...EMBED_TILE_OPTIONS, ...options }, undefined);
 }

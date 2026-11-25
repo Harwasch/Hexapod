@@ -36,11 +36,15 @@ export interface GlobeCommands {
   snapshot(value: BridgeSnapshot): void;
   selectScan(id: string): void;
   flyToScan(id: string): void;
+  memoryWarning(): void;
 }
 /** Native commands only. JS events cannot be reflected into the command channel. */
 export function dispatchMessage(value: unknown, commands: GlobeCommands): void {
   const message = decodeMessage(value);
   switch (message.type) {
+    case "memoryWarning":
+      commands.memoryWarning();
+      break;
     case "snapshot":
       commands.snapshot(message.snapshot);
       break;

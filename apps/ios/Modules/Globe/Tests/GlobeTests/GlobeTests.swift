@@ -148,3 +148,19 @@ struct GlobeTests {
   #expect(globeScanDate("2026-10-03T12:00:00.123Z", locale: locale).contains("2026"))
   #expect(globeScanDate("invalid", locale: locale) == "Scan")
 }
+
+@Test func memoryWarningRoundTripsAndPrecedesScanReplayAfterProcessDeath() throws {
+  let data = try JSONEncoder().encode(BridgeMessage.memoryWarning)
+  #expect(try JSONDecoder().decode(BridgeMessage.self, from: data) == .memoryWarning)
+  var bridge = GlobeBridgeState()
+  #expect(bridge.memoryWarning().isEmpty)
+  #expect(bridge.becomeReady() == [.memoryWarning])
+  #expect(bridge.memoryWarning() == [.memoryWarning])
+  let snapshot = BridgeSnapshot(pins: [], scans: [], boundary: [])
+  _ = bridge.update(snapshot: snapshot, scanID: nil)
+  bridge.invalidate()
+  #expect(bridge.becomeReady() == [.memoryWarning, .snapshot(snapshot: snapshot)])
+  #expect(throws: GlobeError.invalidResponse) {
+    try GlobeBridgeDispatcher().dispatch(.memoryWarning, snapshot: nil)
+  }
+}

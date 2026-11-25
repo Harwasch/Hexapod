@@ -52,3 +52,23 @@ describe("the splat budget follows motion frame time", () => {
     expect(small.budget).toBe(200_000);
   });
 });
+
+it("grows handhelds while fast, halves after 12 slow frames, and respects a choice-based floor", () => {
+  const budget = new AdaptiveSplatBudget(3_000_000, 1_500_000, true);
+  window(budget, 10, budget.budget);
+  expect(budget.budget).toBe(1_725_000);
+  for (let i = 0; i < 11; i++) expect(budget.frame(50, budget.budget)).toBe(false);
+  expect(budget.frame(50, budget.budget)).toBe(true);
+  expect(budget.budget).toBe(862_500);
+  for (let i = 0; i < 10; i++) window(budget, 50, budget.budget);
+  expect(budget.budget).toBe(450_000);
+  const light = new AdaptiveSplatBudget(400_000, 200_000, true);
+  window(light, 50, light.budget);
+  expect(light.budget).toBe(100_000);
+});
+
+it("never grows handhelds beyond the selected ceiling", () => {
+  const budget = new AdaptiveSplatBudget(3_000_000, 1_500_000, true);
+  for (let i = 0; i < 20; i++) window(budget, 10, budget.budget);
+  expect(budget.budget).toBe(3_000_000);
+});

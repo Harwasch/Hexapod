@@ -91,6 +91,7 @@ case ready
 case pinTapped(pinId: String)
 case scanSelected(scanId: String)
 case failure(message: String)
+case memoryWarning
 private enum CodingKeys: String, CodingKey {case version, type, snapshot, scanId, pinId, message}
 public init(from decoder: any Decoder) throws {
 let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -103,6 +104,7 @@ case "ready": self = .ready
 case "pinTapped": self = .pinTapped(pinId: try c.decode(String.self, forKey: .pinId))
 case "scanSelected": self = .scanSelected(scanId: try c.decode(String.self, forKey: .scanId))
 case "failure": self = .failure(message: try c.decode(String.self, forKey: .message))
+case "memoryWarning": self = .memoryWarning
 default: throw GlobeError.invalidResponse
 }
 }
@@ -131,6 +133,9 @@ try c.encode(scanId, forKey: .scanId)
 case let .failure(message):
 try c.encode("failure", forKey: .type)
 try c.encode(message, forKey: .message)
+case .memoryWarning:
+try c.encode("memoryWarning", forKey: .type)
+
 }
 }
 }

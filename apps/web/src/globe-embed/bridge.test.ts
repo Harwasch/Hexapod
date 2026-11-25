@@ -21,8 +21,15 @@ describe("shared native bridge", () => {
     expect(() => decodeMessage(bad)).toThrow();
   });
   it("dispatches commands only, keeping native events out of JS actions", () => {
-    const commands = { snapshot: vi.fn(), selectScan: vi.fn(), flyToScan: vi.fn() };
+    const commands = {
+      snapshot: vi.fn(),
+      selectScan: vi.fn(),
+      flyToScan: vi.fn(),
+      memoryWarning: vi.fn(),
+    };
     for (const fixture of fixtures.slice(0, 3)) dispatchMessage(fixture, commands);
+    dispatchMessage({ version: 1, type: "memoryWarning" }, commands);
+    expect(commands.memoryWarning).toHaveBeenCalledOnce();
     expect(commands.snapshot).toHaveBeenCalledWith(fixtures[0]!.snapshot);
     expect(commands.selectScan).toHaveBeenCalledWith(fixtures[1]!.scanId);
     expect(commands.flyToScan).toHaveBeenCalledWith(fixtures[2]!.scanId);
@@ -45,8 +52,8 @@ describe("shared native bridge", () => {
     );
     expect(EMBED_TILE_OPTIONS).toMatchObject({
       maximumScreenSpaceError: 8,
-      cacheBytes: 64 * 1024 * 1024,
-      maximumCacheOverflowBytes: 16 * 1024 * 1024,
+      cacheBytes: 320 * 1024 * 1024,
+      maximumCacheOverflowBytes: 80 * 1024 * 1024,
       preloadWhenHidden: false,
     });
   });

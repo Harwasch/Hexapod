@@ -21,7 +21,8 @@ import type { Capture, Site, SiteSummary } from "@twin/contracts";
 
 import { loadCollision } from "@/lib/collision";
 import { fetchApi } from "@/api/coldStart";
-import { deviceSplatBudget } from "@/lib/detail";
+import { AdaptiveSplatBudget } from "@/lib/splatBudget";
+import { deviceSplatBudget, deviceSplatCeiling } from "@/lib/detail";
 import { epochDateLabel } from "@/lib/epochs";
 import { siteFramePositions } from "@/lib/spzPositions";
 import { productHeader } from "@/shared/product";
@@ -231,6 +232,10 @@ async function showScan(siteId: string): Promise<void> {
   // (lib/detail.ts -- the phone's Detail choice on a phone, several million on a desktop;
   // SparkRenderer `lodSplatCount`).
   const budget = deviceSplatBudget();
+  const adaptive = new AdaptiveSplatBudget(deviceSplatCeiling(), budget);
+  let drawnSplats = 0;
+  let previousFrame = 0;
+  const previousPose = new THREE.Matrix4();
   // 32-bit centres all the way: each tile's (`extSplats`, sparkStream.ts), which would
   // otherwise hold its own centres as half floats -- half a metre apart a kilometre from its
   // origin -- and the renderer's accumulated splats. A half-float accumulator keeps them
@@ -261,9 +266,22 @@ async function showScan(siteId: string): Promise<void> {
   // Tiles keep arriving after the first one is on screen; leaving the scan stops them.
   let streaming: ReturnType<typeof openScanStream> | null = null;
   let navigation: ScanNavigation | null = null;
-  renderer.setAnimationLoop(() => {
+  renderer.setAnimationLoop((now) => {
     controls.update();
     navigation?.frame();
+    camera.updateMatrixWorld();
+    const moved = !previousPose.equals(camera.matrixWorld);
+    previousPose.copy(camera.matrixWorld);
+    // At-rest intervals and tile-upload stalls are not evidence of rendering capacity.
+    if (
+      moved &&
+      streaming?.settled &&
+      previousFrame &&
+      adaptive.frame(now - previousFrame, Math.min(drawnSplats, adaptive.budget))
+    ) {
+      spark.lodSplatCount = adaptive.budget;
+    }
+    previousFrame = moved ? now : 0;
     streaming?.frame();
     renderer.render(scene, camera);
   });
@@ -327,6 +345,7 @@ async function showScan(siteId: string): Promise<void> {
       },
       hide: (tile) => navigation?.hide(tile),
       report: (drawn) => {
+        drawnSplats = drawn.gaussians;
         section.dataset.tiles = drawn.tiles.map((tile) => tile.uri).join(" ");
         section.dataset.gaussians = String(drawn.gaussians);
         el("scan-date").textContent =

@@ -19,6 +19,7 @@ import {
   splatAntialiasing,
 } from "@/view/sparkStream";
 import { loadCollision } from "@/lib/collision";
+import { TileStreamer } from "@/view/stream";
 import type { TileNode } from "@/view/tiles";
 
 const made = vi.hoisted(() => [] as { options: Record<string, unknown> }[]);
@@ -353,4 +354,37 @@ describe("scan viewer default tile selection", () => {
       stream.stop();
     },
   );
+});
+
+it("updates the stream loading and retained-cache budgets when Spark's draw budget changes", async () => {
+  const budgetChanged = vi.spyOn(TileStreamer.prototype, "setBudget");
+  const clock = vi.spyOn(performance, "now").mockReturnValue(1000);
+  const mesh = new THREE.Object3D() as SplatMesh;
+  mesh.dispose = vi.fn();
+  const spark = { lodSplatCount: 1000 } as SparkRenderer;
+  const stream = openScanStream(
+    { url: "/tileset.json", tree: { root: tile("root.glb"), refine: "REPLACE" } },
+    new THREE.Group(),
+    new THREE.PerspectiveCamera(),
+    { domElement: { clientHeight: 100 } } as THREE.WebGLRenderer,
+    spark,
+    { load: () => Promise.resolve(mesh) },
+  );
+  try {
+    await stream.ready;
+    stream.frame();
+    expect(budgetChanged).not.toHaveBeenCalled();
+    spark.lodSplatCount = 2000;
+    clock.mockReturnValue(2000);
+    stream.frame();
+    expect(budgetChanged).toHaveBeenLastCalledWith(8000, 12000);
+    spark.lodSplatCount = 500;
+    clock.mockReturnValue(3000);
+    stream.frame();
+    expect(budgetChanged).toHaveBeenLastCalledWith(2000, 3000);
+  } finally {
+    stream.stop();
+    clock.mockRestore();
+    budgetChanged.mockRestore();
+  }
 });

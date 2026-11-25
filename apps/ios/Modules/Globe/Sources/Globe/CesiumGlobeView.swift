@@ -33,11 +33,25 @@
       webView.navigationDelegate = self
       webView.isOpaque = false
       webView.scrollView.isScrollEnabled = false
+      #if canImport(UIKit)
+        NotificationCenter.default.addObserver(
+          self, selector: #selector(memoryWarning),
+          name: UIApplication.didReceiveMemoryWarningNotification, object: nil)
+      #endif
     }
+    @objc private func memoryWarning() {
+      for message in bridge.memoryWarning() { send(message) }
+    }
+    deinit { NotificationCenter.default.removeObserver(self) }
     public func configure(webBaseURL: URL?, fixture: Bool) {
-      let local = fixture ? Bundle.module.url(
-        forResource: "globe-embed", withExtension: "html", subdirectory: "GlobeWeb") : nil
-      guard !fixture || local != nil else { error = "Globe fixture unavailable"; return }
+      let local =
+        fixture
+        ? Bundle.module.url(
+          forResource: "globe-embed", withExtension: "html", subdirectory: "GlobeWeb") : nil
+      guard !fixture || local != nil else {
+        error = "Globe fixture unavailable"
+        return
+      }
       let next = GlobeOrigin(webBaseURL: webBaseURL ?? GlobeOrigin.deployed, fixturePage: local)
       guard origin?.page != next.page else { return }
       origin = next
@@ -49,7 +63,10 @@
     public func load() {
       bridge.invalidate()
       error = nil
-      guard let page = origin?.page else { error = "Globe unavailable"; return }
+      guard let page = origin?.page else {
+        error = "Globe unavailable"
+        return
+      }
       if page.isFileURL {
         webView.loadFileURL(page, allowingReadAccessTo: page.deletingLastPathComponent())
       } else {
@@ -94,7 +111,8 @@
       let sender = message.frameInfo.securityOrigin
       guard message.webView === webView, message.frameInfo.isMainFrame,
         origin?.allowsMessage(message.frameInfo.request.url) == true,
-        origin?.allowsSecurityOrigin(scheme: sender.`protocol`, host: sender.host, port: sender.port) == true
+        origin?.allowsSecurityOrigin(
+          scheme: sender.`protocol`, host: sender.host, port: sender.port) == true
       else {
         return
       }
@@ -113,7 +131,10 @@
         }
       } catch { self.error = "Invalid globe event" }
     }
-    public func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { load() }
+    public func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+      _ = bridge.memoryWarning()
+      load()
+    }
     public func webView(
       _ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error
     ) {
@@ -169,7 +190,8 @@
     public var body: some View {
       ZStack(alignment: .top) {
         GlobeWebSurface(
-          session: session, snapshot: snapshot, scanID: scanID, fixture: fixture, webBaseURL: webBaseURL, onPin: onPin,
+          session: session, snapshot: snapshot, scanID: scanID, fixture: fixture,
+          webBaseURL: webBaseURL, onPin: onPin,
           onScan: onScan)
         if let error = session.error {
           VStack {
@@ -203,7 +225,8 @@
         }
         session.webView.frame = view.bounds
         session.update(
-          owner: owner, snapshot: snapshot, scanID: scanID, fixture: fixture, webBaseURL: webBaseURL,
+          owner: owner, snapshot: snapshot, scanID: scanID, fixture: fixture,
+          webBaseURL: webBaseURL,
           onPin: onPin, onScan: onScan)
       }
       view.deactivate = { session.detach(owner: owner) }
