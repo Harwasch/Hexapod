@@ -89,7 +89,7 @@
         if plan.mode == "custom", device.isExposureModeSupported(.custom) {
           device.setExposureModeCustom(
             duration: CMTime(seconds: plan.durationS, preferredTimescale: 1_000_000),
-            iso: Float(plan.iso))
+            iso: Float(plan.iso), completionHandler: nil)
           mode = "custom"
         } else if device.isExposureModeSupported(.locked) {
           device.exposureMode = .locked
