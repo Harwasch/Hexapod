@@ -4,12 +4,13 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { CaptureFile, CaptureFileUpload, UploadWindow } from "@twin/contracts";
+import type { Capture, CaptureFile, CaptureFileUpload, UploadWindow } from "@twin/contracts";
 import { GlassTooltipProvider } from "@twin/ui";
 
 import { ApiError, api, auth } from "@/api/client";
 import { uploadCaptureFile } from "@/api/uploads";
 import { AddPanel } from "@/features/add-data/AddPanel";
+import { CaptureCard } from "@/features/captures/CaptureCard";
 import { captureName, classify, extensionOf, unsupported } from "@/features/captures/recipes";
 import { SettingsSheet } from "@/features/settings/SettingsSheet";
 import { formatBytes, formatDuration } from "@/lib/format";
@@ -102,6 +103,57 @@ const captureFile: CaptureFile = {
   createdAt: "2026-09-20T00:00:00Z",
   updatedAt: "2026-09-20T00:00:00Z",
 };
+
+it("a stored phone capture offers cloud refinement only after confirmation", async () => {
+  const capture: Capture = {
+    id: "phone",
+    name: "Phone scan",
+    slug: "phone",
+    kind: "video",
+    status: "not-started",
+    metadata: { origin: "phone-key" },
+    files: [{ ...captureFile, status: "complete" }],
+    createdAt: captureFile.createdAt,
+    updatedAt: captureFile.updatedAt,
+    description: null,
+    capturedAt: null,
+    device: null,
+    sensor: null,
+    siteId: null,
+    temporalExtent: null,
+    georefMethod: null,
+    scaleSource: null,
+    uncertaintyM: null,
+    quality: null,
+    attribution: [],
+    license: null,
+    provenance: null,
+  };
+  const process = vi.fn();
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  render(
+    wrap(
+      <CaptureCard
+        capture={capture}
+        job={undefined}
+        uploads={{}}
+        onProcess={process}
+        onRetryUpload={vi.fn()}
+        onCancelUpload={vi.fn()}
+        onFlyTo={vi.fn()}
+        processing={false}
+        handoffShown
+      />,
+    ),
+  );
+  expect(screen.getByTestId("capture-status")).toHaveTextContent("Stored");
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Refine in cloud" }));
+  expect(process).not.toHaveBeenCalled();
+  confirm.mockReturnValue(true);
+  await user.click(screen.getByRole("button", { name: "Refine in cloud" }));
+  expect(process).toHaveBeenCalledWith("photo-reconstruct");
+});
 
 function windowOf(first: number, count: number, total: number): UploadWindow {
   const last = Math.min(first + count - 1, total);

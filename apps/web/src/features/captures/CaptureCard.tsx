@@ -179,6 +179,7 @@ export function CaptureCard({
   // somewhere offers "Retry from <stage>" instead, which keeps the work already done.
   const canProcess =
     filesReady && !uploading && (!job || (job.status === "error" && job.steps.length === 0));
+  const storedPhone = capture.metadata.origin === "phone-key" && filesReady && !job;
 
   // A phone capture is created before anything is picked, so its stored kind is a guess;
   // once files land, what they are is the better answer.
@@ -198,7 +199,7 @@ export function CaptureCard({
             data-testid="capture-status"
             data-status={capture.status}
           >
-            {captureStatusLabel(capture.status)}
+            {storedPhone ? "Stored" : captureStatusLabel(capture.status)}
           </GlassBadge>
         </div>
         <div className="card__meta">
@@ -283,12 +284,22 @@ export function CaptureCard({
             <GlassButton
               size="sm"
               variant="primary"
-              onClick={() => onProcess(recipe)}
+              onClick={() => {
+                if (
+                  !storedPhone ||
+                  window.confirm("Refine in cloud? This starts paid GPU processing.")
+                )
+                  onProcess(recipe);
+              }}
               loading={processing}
               leadingIcon={<Play size={13} aria-hidden="true" />}
               data-testid="capture-process"
             >
-              {job?.status === "error" ? "Start again" : recipeLabel(recipe)}
+              {storedPhone
+                ? "Refine in cloud"
+                : job?.status === "error"
+                  ? "Start again"
+                  : recipeLabel(recipe)}
             </GlassButton>
           )}
           {capture.siteId && (
