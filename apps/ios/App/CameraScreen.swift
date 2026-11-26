@@ -79,7 +79,10 @@ private enum CameraStyle {
           VStack {
             header(at: context.date)
             if showPerceptionPerformance {
-              Text(model.perceptionPerformance).font(.caption2.monospaced())
+              Text(
+                model.perceptionPerformance + "\n" + model.selectionDiagnostics + "\n"
+                  + model.pipelineDiagnostics
+              ).font(.caption2.monospaced())
                 .padding(.horizontal, 8).padding(.vertical, 4)
                 .background(.black.opacity(0.65), in: Capsule())
                 .allowsHitTesting(false).accessibilityIdentifier("camera.perceptionPerformance")
