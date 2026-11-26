@@ -250,9 +250,14 @@ def register_bundle(
     summary="Queue or recover the bundle's reconstruction job",
 )
 def process_bundle(
-    capture_id: uuid.UUID, db: DbSession, background: BackgroundTasks, request: Request
+    capture_id: uuid.UUID,
+    db: DbSession,
+    background: BackgroundTasks,
+    request: Request,
+    settings: SettingsDep,
 ) -> JobRead:
     if request.state.api_credential == "phone":
+        phone_access.require_explicit_refine(request, settings)
         phone_access.check_run(db, capture_service.get_capture(db, capture_id))
     job = capture_bundles.process(db, capture_id, phone=request.state.api_credential == "phone")
     worker_wake.schedule(background)

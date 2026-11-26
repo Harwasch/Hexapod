@@ -138,11 +138,12 @@ public actor BundleUploader {
   }
 
   private func request<Response: Decodable, Body: Encodable>(
-    _ path: String, method: String, body: Body, as: Response.Type
+    _ path: String, method: String, body: Body, as: Response.Type, refine: Bool = false
   ) async throws -> Response {
     var request = URLRequest(url: apiBase.appendingPathComponent(path))
     request.timeoutInterval = 90
     request.httpMethod = method
+    if refine { request.setValue("1", forHTTPHeaderField: "X-Hex-Refine") }
     request.setValue("Bearer " + (try await token()), forHTTPHeaderField: "Authorization")
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.httpBody = try JSONEncoder().encode(body)
@@ -178,7 +179,7 @@ public actor BundleUploader {
     }
     let job = try await request(
       "captures/" + captureID + "/process-bundle", method: "POST",
-      body: [String: String](), as: Identifier.self)
+      body: [String: String](), as: Identifier.self, refine: true)
     state.jobID = job.id
     try save()
   }

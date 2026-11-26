@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Capture, CaptureFile, CaptureFileUpload, UploadWindow } from "@twin/contracts";
 import { GlassTooltipProvider } from "@twin/ui";
 
+import { capturesApi } from "@/api/queries";
+
 import { ApiError, api, auth } from "@/api/client";
 import { uploadCaptureFile } from "@/api/uploads";
 import { AddPanel } from "@/features/add-data/AddPanel";
@@ -545,5 +547,15 @@ describe("placing a dropped capture", () => {
     expect(metadata.lat).toBe(51.5007);
     expect(metadata.lon).toBe(-0.1246);
     expect(captureName([file])).toContain("tree");
+  });
+});
+
+it("capture card process requests mark explicit cloud refinement", async () => {
+  const post = mockPost(() => ok({ id: "job" }, 202));
+  await capturesApi.process("phone", { recipe: "photo-reconstruct" });
+  expect(post).toHaveBeenCalledWith("/api/v1/captures/{capture_id}/process", {
+    params: { path: { capture_id: "phone" } },
+    headers: { "X-Hex-Refine": "1" },
+    body: { recipe: "photo-reconstruct" },
   });
 });

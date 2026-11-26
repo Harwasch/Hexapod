@@ -13,6 +13,8 @@ private actor StoredTransport: APITransport {
   func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
     let url = request.url!
     paths.append(url.path)
+    #expect(request.value(forHTTPHeaderField: "X-Hex-Refine")
+      == (url.path.hasSuffix("process-bundle") ? "1" : nil))
     #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer test-key")
     let json = url.path.hasSuffix("bundle-upload")
       ? "{\"id\":\"file\",\"status\":\"complete\",\"bytes\":3}"

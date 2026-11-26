@@ -633,6 +633,7 @@ test.describe("the phone upload page", () => {
     );
     const processed: string[] = [];
     await page.route("**/api/v1/phone/captures/*/process", async (route) => {
+      expect(route.request().headers()["x-hex-refine"]).toBe("1");
       processed.push(route.request().url());
       await route.fulfill({ status: 202, json: { id: "j", status: "not-started", steps: [] } });
     });

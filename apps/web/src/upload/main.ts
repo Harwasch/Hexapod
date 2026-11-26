@@ -91,11 +91,19 @@ async function post<T>(
   bearer: string,
   path: string,
   body: unknown,
-  { unauthorized, upload }: { unauthorized: string; upload?: Upload },
+  {
+    unauthorized,
+    upload,
+    refine = false,
+  }: { unauthorized: string; upload?: Upload; refine?: boolean },
 ): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${bearer}`,
+      ...(refine ? { "X-Hex-Refine": "1" } : {}),
+    },
     body: JSON.stringify(body ?? {}),
   });
   const renewed = response.headers.get("x-handoff-token");
@@ -1063,13 +1071,9 @@ async function captureRow(ui: Ui, capture: Capture, job: Job | undefined): Promi
         : { recipe, params: optionsParams(recipe) },
       {
         unauthorized: KEY_WRONG,
+        refine: true,
       },
     )
-      .catch((error: unknown) => {
-        // Already running is not a failure: follow the run that is.
-        if (error instanceof ApiError && error.status === 409) return undefined;
-        throw error;
-      })
       .then(() => {
         follow(capture.id, ui);
         refreshMine(ui);
@@ -1089,6 +1093,7 @@ async function captureRow(ui: Ui, capture: Capture, job: Job | undefined): Promi
       { params: refineParams() },
       {
         unauthorized: KEY_WRONG,
+        refine: true,
       },
     )
       .then(() => {

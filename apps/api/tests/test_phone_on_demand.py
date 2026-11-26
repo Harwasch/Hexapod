@@ -6,13 +6,14 @@ from unittest.mock import Mock
 
 import boto3
 import pytest
-from fastapi import BackgroundTasks
+from fastapi import BackgroundTasks, Request
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import _db
 from app.api.v1 import captures as capture_routes
+from app.api.v1 import phone as phone_routes
 from app.config import Settings
 from app.main import create_app
 from app.models import Capture, CaptureFile, Job
@@ -20,6 +21,7 @@ from app.models.enums import RunStatus
 from app.schemas.capture import CaptureFileComplete
 from app.schemas.job import JobCreate
 from app.services import capture_bundles, captures, jobs, phone_access, recipes, worker_wake
+from app.services.errors import ConflictError
 from app.storage import S3Storage, get_storage
 from tests.conftest import WORKER_BUCKET
 from tests.test_phone_app_access import ADMIN, PHONE, settings
@@ -263,4 +265,96 @@ def test_phone_bundle_refine_requeues_dead_job_in_place(
     assert retried.status_code == 202, retried.text
     assert retried.json()["id"] == first.json()["id"]
     assert retried.json()["status"] == "not-started"
+    assert db.scalar(select(func.count()).select_from(Job)) == 1
+
+
+def request_for_refine(credential: str, header: str | None) -> Request:
+    headers = [] if header is None else [(b"x-hex-refine", header.encode())]
+    request = Request({"type": "http", "headers": headers})
+    request.state.api_credential = credential
+    return request
+
+
+@pytest.mark.parametrize("credential", ["phone", "write"])
+@pytest.mark.parametrize("automatic", [False, True])
+@pytest.mark.parametrize("header", [None, "0", "1"])
+def test_cloud_refine_gate_distinguishes_phone_and_admin(
+    monkeypatch: pytest.MonkeyPatch, credential: str, automatic: bool, header: str | None
+) -> None:
+    process = Mock(return_value=Job())
+    monkeypatch.setattr(capture_bundles, "process", process)
+    monkeypatch.setattr(captures, "get_capture", Mock())
+    monkeypatch.setattr(phone_access, "check_run", Mock())
+    monkeypatch.setattr(jobs, "job_to_read", Mock())
+    monkeypatch.setattr(worker_wake, "schedule", Mock())
+    args = (
+        uuid.uuid4(),
+        Mock(spec=Session),
+        BackgroundTasks(),
+        request_for_refine(credential, header),
+        Settings(_env_file=None, phone_upload_auto_process=automatic),
+    )
+    if credential == "phone" and not automatic and header != "1":
+        with pytest.raises(ConflictError, match="Update the app to refine in the cloud"):
+            capture_routes.process_bundle(*args)
+        process.assert_not_called()
+    else:
+        capture_routes.process_bundle(*args)
+        assert process.call_args.kwargs["phone"] == (credential == "phone")
+
+
+@pytest.mark.parametrize("header", [None, "1"])
+def test_legacy_phone_process_requires_explicit_refine(
+    monkeypatch: pytest.MonkeyPatch, header: str | None
+) -> None:
+    create = Mock(return_value=Job())
+    monkeypatch.setattr(jobs, "create_on_demand", create)
+    monkeypatch.setattr(jobs, "job_to_read", Mock())
+    monkeypatch.setattr(
+        captures, "get_capture", Mock(return_value=Capture(metadata_={"origin": "phone-key"}))
+    )
+    monkeypatch.setattr(phone_access, "check_run", Mock())
+    monkeypatch.setattr(worker_wake, "schedule", Mock())
+    args = (
+        uuid.uuid4(),
+        JobCreate(recipe="photo-reconstruct"),
+        Mock(spec=Session),
+        BackgroundTasks(),
+        request_for_refine("phone", header),
+        Settings(_env_file=None, phone_upload_auto_process=False),
+    )
+    if header is None:
+        with pytest.raises(ConflictError, match="Update the app to refine in the cloud"):
+            phone_routes.process_phone_capture(*args)
+        create.assert_not_called()
+    else:
+        phone_routes.process_phone_capture(*args)
+        create.assert_called_once()
+
+
+@pytest.mark.parametrize("bundle", [False, True])
+def test_phone_gate_blocks_legacy_automatic_requests(
+    app_client: TestClient, db: Session, bundle: bool
+) -> None:
+    from tests.test_phone import uploaded
+
+    if bundle:
+        cid = upload(app_client)
+        url = f"/api/v1/captures/{cid}/process-bundle"
+        payload = {}
+    else:
+        cid = app_client.post("/api/v1/phone/captures", headers=PHONE, json={}).json()["capture"][
+            "id"
+        ]
+        uploaded(db, cid)
+        db.commit()
+        url = f"/api/v1/phone/captures/{cid}/process"
+        payload = {"recipe": "photo-reconstruct"}
+    old_headers = {key: value for key, value in PHONE.items() if key != "X-Hex-Refine"}
+    refused = app_client.post(url, headers=old_headers, json=payload)
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == "Update the app to refine in the cloud"
+    assert db.scalar(select(func.count()).select_from(Job)) == 0
+    accepted = app_client.post(url, headers={**PHONE, "X-Hex-Refine": "1"}, json=payload)
+    assert accepted.status_code == 202, accepted.text
     assert db.scalar(select(func.count()).select_from(Job)) == 1

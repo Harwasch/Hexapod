@@ -3,6 +3,7 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 
+from fastapi import Request
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
@@ -12,6 +13,12 @@ from app.services import epochs
 from app.services.errors import ConflictError, NotFoundError, UnauthorizedError
 
 ORIGIN = "phone-key"
+
+
+def require_explicit_refine(request: Request, settings: Settings) -> None:
+    """Legacy clients auto-call process after upload; refuse those paid requests."""
+    if not settings.phone_upload_auto_process and request.headers.get("X-Hex-Refine") != "1":
+        raise ConflictError("Update the app to refine in the cloud")
 
 
 def capture(db: Session, capture_id: uuid.UUID) -> Capture:

@@ -364,8 +364,13 @@ its existing job while running, rather than creating another run.
 
 `PHONE_UPLOAD_AUTO_PROCESS=true` opts native phone bundles back into processing when their
 single archive completes; it does not auto-process administrative uploads or partial web
-photo sets. Keep it false for the manual-spend policy. Already installed older clients may
-still explicitly call a process endpoint after upload; update those clients as part of rollout.
+photo sets. Keep it false for the manual-spend policy. Phone-key requests to
+`/captures/{id}/process-bundle` and `/phone/captures/{id}/process` must send
+`X-Hex-Refine: 1` while the flag is false. Missing or invalid headers receive 409,
+"Update the app to refine in the cloud", without creating a job. This blocks older
+clients' automatic process calls. Write-token/admin requests keep their existing behavior;
+`POST /captures/{id}/process` creates a new run with the operator's options. Explicit phone
+Refine retries failed or cancelled jobs in place and recovers running or complete jobs.
 The iOS confirmation's display estimate has one source,
 `CaptureStatus.cloudRefineEstimatedCost` in `apps/ios/App/Support/CaptureStatus.swift`.
 It is an estimate per scan, not a billing quote. Upload completion is persisted separately

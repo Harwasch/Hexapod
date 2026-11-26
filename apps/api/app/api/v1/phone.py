@@ -317,8 +317,14 @@ def create_phone_capture(
     summary="Queue a run over a capture this phone key started",
 )
 def process_phone_capture(
-    capture_id: uuid.UUID, payload: JobCreate, db: DbSession, background: BackgroundTasks
+    capture_id: uuid.UUID,
+    payload: JobCreate,
+    db: DbSession,
+    background: BackgroundTasks,
+    request: Request,
+    settings: SettingsDep,
 ) -> JobRead:
+    phone_access.require_explicit_refine(request, settings)
     capture = capture_service.get_capture(db, capture_id)
     if (capture.metadata_ or {}).get("origin") != ORIGIN:
         # Same answer as a wrong key: the phone key does not reach other captures.
