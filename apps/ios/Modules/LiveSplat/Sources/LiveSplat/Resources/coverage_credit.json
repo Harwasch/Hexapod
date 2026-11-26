@@ -1,0 +1,11 @@
+{
+  "hairs": 14,
+  "coneDeg": 25,
+  "sharpness": 1,
+  "viewsToFill": 8,
+  "targetMmPerPx": null,
+  "parallaxMinDeg": null,
+  "normalEMA": 0.2,
+  "baseLength": 0.08,
+  "parallaxStubFraction": 0.15
+}

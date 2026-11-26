@@ -32,6 +32,7 @@ public enum ScanPreviewStyle: String, CaseIterable, Sendable {
 /// Runtime fallback never writes this preference.
 @MainActor public final class LiveSplatPreference {
   public static let styleKey = "hex.liveSplat.gaussianPreview"
+  public static let coverageKey = "hex.liveSplat.coverageHairs"
   public static let insetKey = "hex.liveSplat.inset"
   public static let key = "hex.liveSplat.training"
   public static let shared = LiveSplatPreference()
@@ -57,6 +58,10 @@ public enum ScanPreviewStyle: String, CaseIterable, Sendable {
   public var insetEnabled: Bool {
     get { store.bool(forKey: Self.insetKey) ?? false }
     set { update(newValue, key: Self.insetKey, current: insetEnabled) }
+  }
+  public var coverageEnabled: Bool {
+    get { store.bool(forKey: Self.coverageKey) ?? true }
+    set { update(newValue, key: Self.coverageKey, current: coverageEnabled) }
   }
   private func update(_ value: Bool, key: String, current: Bool) {
     guard value != current else { return }

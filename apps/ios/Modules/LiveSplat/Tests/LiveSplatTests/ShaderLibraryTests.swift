@@ -12,6 +12,7 @@
     for name in [
       "fuseSurfels", "coverageScanPreview", "compositeScanPreview", "prepareGaussianSort",
       "bitonicGaussianSort", "reduceScanScene", "finishScanScene", "compositeScanInset",
+      "observeCoverageCells", "creditCoverageCells", "prepareCoverageHairs", "finishCoverageHairs",
     ] {
       let function = try #require(library.makeFunction(name: name))
       _ = try device.makeComputePipelineState(function: function)
@@ -24,6 +25,7 @@
     _ = try device.makeRenderPipelineState(descriptor: render)
     for pair in [
       ("gaussianVertex", "gaussianFragment"), ("phoneFrustumVertex", "phoneFrustumFragment"),
+      ("coverageHairVertex", "coverageHairFragment"),
     ] {
       render.vertexFunction = try #require(library.makeFunction(name: pair.0))
       render.fragmentFunction = try #require(library.makeFunction(name: pair.1))

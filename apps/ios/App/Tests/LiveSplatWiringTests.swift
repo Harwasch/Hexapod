@@ -90,3 +90,29 @@ import Voice
   #expect(disc.covariance[2, 2] == disc.covariance[0, 0])
   renderer.stop()
 }
+
+@Test @MainActor func coverageToggleUsesSharedPersistedPreferenceWithoutReplacingCameraRenderer()
+  throws
+{
+  let suite = "hex.coverage.\(UUID().uuidString)"
+  let defaults = try #require(UserDefaults(suiteName: suite))
+  defer { defaults.removePersistentDomain(forName: suite) }
+  let preference = LiveSplatPreference(store: UserDefaultsLiveSplatStore(defaults: defaults))
+  let registry = PieceRegistry(defaults: defaults, liveSplatPreference: preference)
+  let renderer = try #require(
+    try registry.splatRenderers.resolve("real") as? DefaultLiveSplatRenderer)
+  // On by default: the coverage cue is what a new scanner should see without opening Settings.
+  #expect(renderer.preference.coverageEnabled)
+  renderer.start()
+  preference.coverageEnabled = false
+  let restored = LiveSplatPreference(store: UserDefaultsLiveSplatStore(defaults: defaults))
+  #expect(!restored.coverageEnabled && !renderer.preference.coverageEnabled)
+  preference.coverageEnabled = true
+  #expect(restored.coverageEnabled && renderer.preference.coverageEnabled)
+  #expect(restored.previewEnabled && !restored.insetEnabled && restored.previewStyle == .discs)
+  #expect(try registry.splatRenderers.resolve("real") === renderer)
+  #expect(renderer.status == .scanPreview)
+  preference.coverageEnabled = false
+  #expect(!restored.coverageEnabled)
+  renderer.stop()
+}

@@ -105,3 +105,50 @@ coverage for isolated UI tests. See [TESTING.md](TESTING.md) for the evidence bo
 Apple API references: [RealityKit postprocess callback](https://developer.apple.com/documentation/realitykit/arview/rendercallbacks-swift.struct/postprocess),
 [ARSession delegate queue](https://developer.apple.com/documentation/arkit/arsession/delegatequeue),
 and [Core Video Metal texture cache](<https://developer.apple.com/documentation/corevideo/cvmetaltexturecachecreatetexturefromimage(_:_:_:_:_:_:_:_:_:)>).
+
+## Coverage hairs (phone prototype)
+
+Settings → **Coverage** defaults off and persists independently of Preview and
+Inset. Enable it while scanning to see amber hairs shorten toward green as viewing
+directions accumulate credit. This estimates coverage of observed surfaces; the
+defaults have not been fitted to splat training quality. The existing coverage tint
+and summary are unchanged. Hairs also work with Scan preview off. Disabling the
+toggle pauses credit and drawing; re-enabling resumes the same grid. Starting a new
+scan clears it. Switching Discs/Splat preserves it. The inset does not draw hairs.
+
+`CoverageCreditParameters` loads the bundled `Resources/coverage_credit.json`.
+Missing JSON fields use documented defaults; invalid values fail preparation.
+Fitted values can replace this resource without changing code (an app rebuild is
+still required). Defaults: 14 directions, 25° cone, sharpness 1, eight ideal views
+to fill, resolution and parallax gates off, normal EMA 0.2, base length 8 cm.
+With a resolution target, weight is `min(1, targetMmPerPx / mmPerPx)`;
+mm/px uses world distance, depth-image focal length and inverse incidence cosine.
+Directions form an equal-area Fibonacci hemisphere in a deterministic frame around
+the quantized mean depth normal, facing outward toward the camera. Credit bytes
+encode 0…eight view units as 0…255, rounded each keyframe. A hair gets zero credit
+on/outside its cone, and credit saturates. The optional parallax gate requires a
+second contributor separated from the first by the configured angle. Until then,
+a saturated hair retains a short visible stub (`parallaxStubFraction`, default 15%
+of base length).
+
+The separate `CoverageMetalPass` follows surfel fusion using the same rotating,
+high-confidence depth samples. A nonblocking four-way coarse hash admits at most
+one sample per bucket per keyframe; contention retries in later frames. The normal
+is an EMA of local depth normals, oriented consistently; missing neighbours or
+depth edges fall back to the viewing normal. One subsequent credit dispatch updates
+each coarse cell seen that keyframe. Hairs move with the mean normal; existing
+credit is retained when that frame shifts. This is a prototype approximation.
+
+Storage is fixed: 32,768 ten-centimetre cells at exactly 32 bytes each, plus separate
+32-byte key/position records, 60-byte first-contributor histories, bucket claims,
+a 60,000-entry draw list and indirect arguments: 4,576,016 bytes total. No surfel
+layout changes, geometry readback, per-frame allocations or scan-duration growth.
+Four-way collisions replace the least observed slot and reset its history.
+The CPU `CoverageHash` is a test oracle and is never allocated for live ARFrames.
+
+A compute pass compacts unfilled, frustum-visible hairs into at most 60,000 line
+instances. They draw after the surfels in the same postprocess render encoder,
+with preview depth testing and live LiDAR foreground rejection. The existing
+8 ms feedback halves the candidate cells and draw cap at quality level one;
+level two skips hair preparation/drawing. Credit continues at the adaptive fusion
+rate. These are work bounds; phone appearance, FPS and resident memory are unmeasured.
