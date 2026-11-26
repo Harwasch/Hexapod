@@ -47,6 +47,35 @@ class PackageRunnerTests(unittest.TestCase):
             self.assertIn('| App | PASS |', summary.read_text())
             self.assertEqual(len(list((ios / 'build/package-logs').glob('*.log'))), 3)
 
+    def test_multi_product_package_uses_the_package_scheme(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ios = Path(directory)
+            for name in ('Modules/Single', 'Modules/Multi', 'App'):
+                path = ios / name / 'Package.swift'
+                path.parent.mkdir(parents=True)
+                path.touch()
+            calls = []
+
+            def run(command, **kwargs):
+                parent = kwargs['cwd'].name
+                if command[0] == 'swift':
+                    products = [{'name': 'A'}, {'name': 'B'}] if parent == 'Multi' else [{'name': 'A'}]
+                    return subprocess.CompletedProcess(command, 0, json.dumps({
+                        'name': 'AppSupport' if parent == 'App' else parent,
+                        'products': products,
+                        'targets': [{'type': 'test'}],
+                    }))
+                calls.append(command)
+                return subprocess.CompletedProcess(command, 0)
+
+            with patch.object(packages.subprocess, 'run', side_effect=run), patch.dict(
+                packages.os.environ, {}, clear=False
+            ), contextlib.redirect_stdout(io.StringIO()):
+                packages.os.environ.pop('GITHUB_STEP_SUMMARY', None)
+                self.assertEqual(packages.run_packages('test', ios, destination='x'), 0)
+            schemes = [c[c.index('-scheme') + 1] for c in calls]
+            self.assertEqual(schemes, ['Multi-Package', 'Single', 'AppSupport'])
+
     def test_manifest_failure_does_not_stop_other_packages_and_tests_skip_empty_targets(self):
         with tempfile.TemporaryDirectory() as directory:
             ios = Path(directory)
