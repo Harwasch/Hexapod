@@ -30,6 +30,7 @@
     "ready": {},
     "pinTapped": { "pinId": "String" },
     "scanSelected": { "scanId": "String" },
-    "failure": { "message": "String" }
+    "failure": { "message": "String" },
+    "memoryWarning": {}
   }
 }

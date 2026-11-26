@@ -31,4 +31,5 @@ export type BridgeMessage =
   | { version: 1; type: "ready" }
   | { version: 1; type: "pinTapped"; pinId: string }
   | { version: 1; type: "scanSelected"; scanId: string }
-  | { version: 1; type: "failure"; message: string };
+  | { version: 1; type: "failure"; message: string }
+  | { version: 1; type: "memoryWarning" };

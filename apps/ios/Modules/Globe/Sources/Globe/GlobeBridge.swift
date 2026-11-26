@@ -93,10 +93,12 @@ public struct GlobeBridgeState: Sendable {
   public private(set) var ready = false
   private var snapshot: BridgeSnapshot?
   private var scanID: String?
+  private var memoryReduced = false
   public init() {}
   public mutating func invalidate() { ready = false }
   public mutating func update(snapshot: BridgeSnapshot, scanID: String?) -> [BridgeMessage] {
-    let selected = scanID == nil
+    let selected =
+      scanID == nil
       ? snapshot.scans.first?.id : snapshot.scans.first(where: { $0.id == scanID })?.id
     let changed = self.snapshot != snapshot
     let selectionChanged = self.scanID != selected
@@ -106,10 +108,16 @@ public struct GlobeBridgeState: Sendable {
     return (changed ? [.snapshot(snapshot: snapshot)] : [])
       + (changed || selectionChanged ? focus() : [])
   }
+  /// Sticky across reloads; replay before snapshot/focus so no full-tier scan is requested.
+  public mutating func memoryWarning() -> [BridgeMessage] {
+    memoryReduced = true
+    return ready ? [.memoryWarning] : []
+  }
   public mutating func becomeReady() -> [BridgeMessage] {
     ready = true
-    guard let snapshot else { return [] }
-    return [.snapshot(snapshot: snapshot)] + focus()
+    let pressure: [BridgeMessage] = memoryReduced ? [.memoryWarning] : []
+    guard let snapshot else { return pressure }
+    return pressure + [.snapshot(snapshot: snapshot)] + focus()
   }
   /// Explicit Open scan refocuses even when its selection has not changed.
   public mutating func openScan(_ scanID: String) -> [BridgeMessage] {

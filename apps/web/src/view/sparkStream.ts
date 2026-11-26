@@ -105,6 +105,7 @@ export function streamWithView(
   loadMesh?: (tile: TileNode) => Promise<SplatMesh>,
   fullResolution = false,
   projectionFromMatrix = false,
+  budgetNow: () => number = () => budget,
 ): Streaming {
   const streamer = new TileStreamer<SplatMesh>(
     tileset.tree,
@@ -164,6 +165,13 @@ export function streamWithView(
     },
     frame: () => {
       const now = performance.now();
+      const nextBudget = budgetNow();
+      if (!fullResolution && nextBudget !== budget) {
+        budget = nextBudget;
+        const loadBudget = Math.min(budget * LOAD_FACTOR, MAX_STREAMED);
+        streamer.setBudget(loadBudget, loadBudget * CACHE_FACTOR);
+        arrived = true;
+      }
       const moved = !lastPose.equals(camera.matrixWorld);
       if (!(arrived || moved) || now - lastPlan < REPLAN_MS) return;
       lastPlan = now;
@@ -279,6 +287,7 @@ export function openScanStream(
         load,
         display.fullResolution,
         display.projectionFromMatrix,
+        () => spark.lodSplatCount ?? budget,
       );
     } else {
       additive.set(root, mesh);

@@ -17,6 +17,8 @@ import { dispatchMessage } from "./bridge";
 import type { BridgeMessage, BridgeSnapshot } from "./generated";
 import { ScanResolution, scanRange, seatScanWithRetry } from "./scanView";
 import { ScanLayer } from "./ScanLayer";
+import { SCAN_DETAIL_CONFIG } from "@/lib/detail";
+import { heapNearLimit, rememberMemoryPressure, restoreMemoryTier, type HeapUsage } from "./memory";
 import { installErrorForwarding } from "./errors";
 import fixtures from "../../../ios/Modules/Globe/Tests/GlobeTests/Fixtures/messages.json";
 import "./style.css";
@@ -44,6 +46,7 @@ function emit(message: BridgeMessage): void {
 const removeErrors = installErrorForwarding(window, emit);
 window.addEventListener("pagehide", removeErrors, { once: true });
 try {
+  const memoryTier = restoreMemoryTier();
   const viewer = createGlobeWidget(element("#globe"), element("#credits"));
   const removeRenderError = viewer.scene.renderError.addEventListener(() => {
     status.textContent = "Globe rendering failed";
@@ -88,7 +91,7 @@ try {
   const unseatedScans = new WeakSet<object>();
   const scanLayer = new ScanLayer(
     async (url) => {
-      const tiles = await createEmbedScanTileset(url);
+      const tiles = await createEmbedScanTileset(url, memoryTier.options);
       try {
         await terrainLoaded;
         if (!(await seatScanWithRetry(tiles, viewer.terrainProvider))) unseatedScans.add(tiles);
@@ -99,6 +102,7 @@ try {
       }
     },
     (tiles) => {
+      memoryTier.apply(tiles);
       viewer.scene.primitives.add(tiles);
       controls.enableCollisionDetection = false;
       status.textContent = [
@@ -121,6 +125,24 @@ try {
       emit({ version: 1, type: "failure", message: "Scan could not load" });
     },
   );
+  function memoryWarning(): void {
+    rememberMemoryPressure();
+    if (!memoryTier.stepDown()) return;
+    if (scanLayer.visible) memoryTier.apply(scanLayer.visible);
+    viewer.scene.requestRender();
+  }
+  const contextLost = (event: Event): void => {
+    event.preventDefault();
+    memoryWarning();
+  };
+  // Cesium cannot resume a lost context reliably; reload with the persisted lower tier.
+  const contextRestored = (): void => location.reload();
+  viewer.canvas.addEventListener("webglcontextlost", contextLost);
+  viewer.canvas.addEventListener("webglcontextrestored", contextRestored);
+  const heapPoll = window.setInterval(() => {
+    if (heapNearLimit((performance as Performance & { memory?: HeapUsage }).memory))
+      memoryWarning();
+  }, SCAN_DETAIL_CONFIG.embed.heapPollMs);
   function selectScan(id: string): void {
     const scan = state.scans.find((s) => s.id === id);
     if (!scan) throw Error("Unknown scan");
@@ -214,6 +236,7 @@ try {
             }
             viewer.scene.requestRender();
           },
+          memoryWarning,
           selectScan,
           flyToScan,
         });
@@ -239,6 +262,9 @@ try {
   window.addEventListener(
     "pagehide",
     () => {
+      clearInterval(heapPoll);
+      viewer.canvas.removeEventListener("webglcontextlost", contextLost);
+      viewer.canvas.removeEventListener("webglcontextrestored", contextRestored);
       removeBasemap();
       removeRenderError();
       removeQuality();

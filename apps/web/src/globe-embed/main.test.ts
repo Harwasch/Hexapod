@@ -42,6 +42,7 @@ vi.mock("./basemap", () => ({
 afterEach(() => {
   window.dispatchEvent(new Event("pagehide"));
   delete window.webkit;
+  sessionStorage.clear();
   vi.restoreAllMocks();
 });
 it.each([false, true])(
@@ -82,6 +83,7 @@ it.each([false, true])(
       tileFailed: new CesiumEvent(),
       boundingSphere: { center: origin, radius: 4 },
       destroy: vi.fn(),
+      trimLoadedTiles: vi.fn(),
     };
     hooks.load.mockResolvedValue(tile);
     await import("./main");
@@ -96,14 +98,32 @@ it.each([false, true])(
     });
     const bridge = window.globeBridge!;
     fixtures.slice(0, 3).forEach((fixture) => bridge.receive(fixture));
+    if (!terrainFails) bridge.receive({ version: 1, type: "memoryWarning" });
     await vi.waitFor(() => expect(viewer.scene.primitives.add).toHaveBeenCalledWith(tile));
+    if (terrainFails)
+      viewer.canvas.dispatchEvent(new Event("webglcontextlost", { cancelable: true }));
+    expect(tile).toMatchObject({
+      cacheBytes: 160 * 1024 * 1024,
+      maximumCacheOverflowBytes: 40 * 1024 * 1024,
+      maximumScreenSpaceError: 16,
+    });
+    bridge.receive({ version: 1, type: "memoryWarning" });
+    expect(tile.trimLoadedTiles).toHaveBeenCalledOnce();
+    const lost = new Event("webglcontextlost", { cancelable: true });
+    viewer.canvas.dispatchEvent(lost);
+    expect(lost.defaultPrevented).toBe(true);
+    expect(sessionStorage.getItem("twin.embed.memoryReduced")).toBe("true");
     expect(document.body.dataset.scanState).toBe("ready");
     expect(tile.destroy).not.toHaveBeenCalled();
     if (terrainFails)
       expect(document.querySelector("#status")?.textContent).toContain("height unverified");
     expect(entities.values).toHaveLength(3);
     expect(viewer.scene.screenSpaceCameraController.enableCollisionDetection).toBe(false);
-    expect(hooks.load).toHaveBeenCalledWith("./fixtures/globe-splat/tileset.json");
+    expect(hooks.load).toHaveBeenCalledWith("./fixtures/globe-splat/tileset.json", {
+      cacheBytes: 320 * 1024 * 1024,
+      maximumCacheOverflowBytes: 80 * 1024 * 1024,
+      maximumScreenSpaceError: 8,
+    });
     const clock = vi.spyOn(performance, "now");
     function render(start: number, duration: number): void {
       clock.mockReturnValueOnce(start).mockReturnValueOnce(start + duration);
