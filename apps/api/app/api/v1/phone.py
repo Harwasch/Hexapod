@@ -16,6 +16,7 @@ from pydantic import Field
 from sqlalchemy import select
 
 from app.api.deps import DbSession, SettingsDep, Storage
+from app.models import Capture
 from app.models.enums import CaptureKind
 from app.models.job import Job
 from app.schemas.base import CamelModel
@@ -326,7 +327,9 @@ def process_phone_capture(
     if payload.recipe not in PHONE_RECIPES:
         raise ConflictError(f"A phone can start {', '.join(sorted(PHONE_RECIPES))}, not that.")
     params = _checked_options(payload.recipe, payload.params)
-    job = job_service.create_job(db, capture_id, JobCreate(recipe=payload.recipe, params=params))
+    job = job_service.create_on_demand(
+        db, capture_id, JobCreate(recipe=payload.recipe, params=params), retry_failed=True
+    )
     worker_wake.schedule(background)
     return job_service.job_to_read(job)
 
@@ -380,13 +383,15 @@ def refine_phone_capture(
     if (capture.metadata_ or {}).get("origin") != ORIGIN:
         raise UnauthorizedError("That phone key is not right.")
     phone_access.check_run(db, capture)
+    # Serialize the retry with process-bundle/process and another press of Refine.
+    db.execute(select(Capture.id).where(Capture.id == capture_id).with_for_update())
     job = db.scalars(
         select(Job).where(Job.capture_id == capture_id).order_by(Job.created_at.desc())
     ).first()
     if job is None:
         raise ConflictError("Nothing to refine yet: process it first.")
     if job.status in job_service.ACTIVE_STATUSES:
-        raise ConflictError("It is still running. Refine it when it has finished.")
+        return job_service.job_to_read(job)
     if job.recipe != "photo-reconstruct":
         raise ConflictError("Only a photo or video capture can be refined.")
     # The verdict is what makes a run refinable: it is written when a run *finishes*, so

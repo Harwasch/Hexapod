@@ -14,7 +14,7 @@ from sqlalchemy import Select, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app.models import Job, JobStep
+from app.models import Capture, Job, JobStep
 from app.models.enums import RunStatus, UploadStatus
 from app.models.job import ACTIVE_JOB_INDEX
 from app.schemas.job import JobCreate, JobRead, JobStepLog
@@ -26,6 +26,41 @@ from app.storage import ObjectStorage
 #: A run that has not finished. A capture may be run many times -- comparing two runs
 #: is the point of the console -- but not twice at once.
 ACTIVE_STATUSES = (RunStatus.NOT_STARTED, RunStatus.IN_PROGRESS)
+
+
+def create_on_demand(
+    db: Session, capture_id: uuid.UUID, payload: JobCreate, *, retry_failed: bool = False
+) -> Job:
+    """One initial cloud run per capture/recipe, including lost responses and old IDs.
+
+    Serialize on the capture before looking up the recipe. Existing random job IDs
+    survive unchanged; newly requested runs use a deterministic UUID.
+    """
+    get_capture(db, capture_id)
+    db.execute(select(Capture.id).where(Capture.id == capture_id).with_for_update())
+    existing = db.scalar(
+        select(Job)
+        .where(Job.capture_id == capture_id, Job.recipe == payload.recipe)
+        .order_by(Job.created_at.desc())
+    )
+    if existing is not None:
+        if retry_failed and existing.status in (RunStatus.ERROR, RunStatus.CANCELLED):
+            recipe_service.check_overrides(payload.recipe, payload.params)
+            existing.params = payload.params
+            if existing.steps:
+                return retry_job(db, existing.id, from_stage=existing.steps[0].stage_id)
+            # A user may stop a queued job before a worker has written any steps.
+            existing.status = RunStatus.NOT_STARTED
+            existing.error = None
+            existing.finished_at = None
+            existing.duration_s = None
+            existing.claimed_by = None
+            existing.claimed_at = None
+            existing.lease_expires_at = None
+            _commit_active(db, capture_id)
+            db.refresh(existing)
+        return existing
+    return create_job(db, capture_id, payload, job_id=uuid.uuid5(capture_id, payload.recipe))
 
 
 def create_job(

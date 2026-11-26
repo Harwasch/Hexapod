@@ -191,9 +191,10 @@ def test_refine_resumes_the_preview_at_train_inside_its_region(
     assert STAGES[: STAGES.index("train")] == kept
     assert [states[s] for s in kept] == ["complete"] * len(kept)
     assert {states[s] for s in STAGES[len(kept) :]} == {"not-started"}
-    # And it is running now, so a second Refine waits for it.
+    # A second press follows the same queued job.
     again = client.post(f"/api/v1/phone/captures/{capture_id}/refine", json={}, headers=PHONE)
-    assert again.status_code == 409
+    assert again.status_code == 202
+    assert again.json()["id"] == body["id"]
     # Stopped, it still has the preview it started from, and can be refined again.
     stopped = client.post(f"/api/v1/phone/captures/{capture_id}/stop", headers=PHONE)
     assert stopped.json()["status"] == "cancelled"
@@ -217,8 +218,8 @@ def test_refine_is_refused_where_there_is_nothing_to_refine(
 ) -> None:
     capture_id = _process(client, db)
     url = f"/api/v1/phone/captures/{capture_id}/refine"
-    # Still running.
-    assert client.post(url, json={}, headers=PHONE).status_code == 409
+    # Still running: follow the existing run without duplicating it.
+    assert client.post(url, json={}, headers=PHONE).status_code == 202
     # Finished, but with no quality verdict (a run from before the quality stage).
     _finish(db, capture_id, quality=None)
     assert client.post(url, json={}, headers=PHONE).status_code == 409

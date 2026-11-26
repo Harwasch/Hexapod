@@ -129,6 +129,8 @@ class Settings(BaseSettings):
     api_phone_app_key_hash: str | None = None
     # How many captures the phone key may create in any 24 hours.
     api_phone_daily_captures: int = 20
+    # Uploading stores bytes; paid cloud work requires an explicit process request.
+    phone_upload_auto_process: bool = False
     # The request header holding the real client address, for the per-client rate limits
     # (app/services/ratelimit.py). Fly's proxy sets `Fly-Client-IP` on every request, so
     # behind Fly it cannot be forged; without it every client shares the proxy's address.

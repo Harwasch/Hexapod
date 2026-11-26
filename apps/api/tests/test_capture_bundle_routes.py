@@ -81,7 +81,7 @@ def test_process_is_idempotent_and_selects_existing_recipe(monkeypatch: pytest.M
     monkeypatch.setattr(capture_bundles, "locked_capture", lambda *_: capture)
     job = Job(params=capture_bundles.PARAMS)
     create = Mock(return_value=job)
-    monkeypatch.setattr(jobs, "create_job", create)
+    monkeypatch.setattr(jobs, "create_on_demand", create)
     db.scalar.return_value = None
     assert capture_bundles.process(db, capture_id) is job
     payload = create.call_args.args[2]
@@ -91,8 +91,7 @@ def test_process_is_idempotent_and_selects_existing_recipe(monkeypatch: pytest.M
     assert capture_bundles.process(db, capture_id) is job
     create.assert_called_once()
     job.params = {}
-    with pytest.raises(ConflictError):
-        capture_bundles.process(db, capture_id)
+    assert capture_bundles.process(db, capture_id) is job
     file.status = UploadStatus.IN_PROGRESS
     with pytest.raises(ConflictError):
         capture_bundles.process(db, capture_id)

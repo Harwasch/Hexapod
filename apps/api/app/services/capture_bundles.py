@@ -113,9 +113,9 @@ def process(db: Session, capture_id: uuid.UUID) -> Job:
         .order_by(Job.created_at)
     )
     if existing is not None:
-        if existing.params != PARAMS:
-            raise ConflictError("capture already has a different reconstruction")
         return existing
     # Validation of untrusted archive contents runs in normalize, before any paid pose
     # or training stage. The API never downloads a multi-gigabyte capture into memory.
-    return jobs.create_job(db, capture_id, JobCreate(recipe="photo-reconstruct", params=PARAMS))
+    return jobs.create_on_demand(
+        db, capture_id, JobCreate(recipe="photo-reconstruct", params=PARAMS)
+    )
