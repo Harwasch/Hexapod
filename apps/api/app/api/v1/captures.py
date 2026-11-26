@@ -132,7 +132,7 @@ def complete_file(
         and capture.metadata_.get("bundleFormat") == capture_bundles.FORMAT
     ):
         phone_access.check_run(db, capture)
-        capture_bundles.process(db, capture_id)
+        capture_bundles.process(db, capture_id, phone=True)
         worker_wake.schedule(background)
     return capture_service.file_to_read(file)
 
@@ -166,16 +166,7 @@ def abort_file(
 def process_capture(
     capture_id: uuid.UUID, payload: JobCreate, db: DbSession, background: BackgroundTasks
 ) -> JobRead:
-    capture = capture_service.get_capture(db, capture_id)
-    if (
-        capture.metadata_.get("bundleFormat") == capture_bundles.FORMAT
-        and payload.recipe == "photo-reconstruct"
-    ):
-        job = capture_bundles.process(db, capture_id)
-    elif capture.metadata_.get("origin") == phone_access.ORIGIN:
-        job = job_service.create_on_demand(db, capture_id, payload, retry_failed=True)
-    else:
-        job = job_service.create_job(db, capture_id, payload)
+    job = job_service.create_job(db, capture_id, payload)
     # Committed: start the worker if it has stopped for want of work (worker_wake).
     worker_wake.schedule(background)
     return job_service.job_to_read(job)
@@ -263,6 +254,6 @@ def process_bundle(
 ) -> JobRead:
     if request.state.api_credential == "phone":
         phone_access.check_run(db, capture_service.get_capture(db, capture_id))
-    job = capture_bundles.process(db, capture_id)
+    job = capture_bundles.process(db, capture_id, phone=request.state.api_credential == "phone")
     worker_wake.schedule(background)
     return job_service.job_to_read(job)

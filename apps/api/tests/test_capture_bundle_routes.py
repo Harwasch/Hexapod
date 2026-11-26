@@ -17,6 +17,7 @@ from app.config import Settings
 from app.models import Capture, CaptureFile, Job
 from app.models.enums import CaptureKind, UploadStatus
 from app.schemas.capture import CaptureCreate
+from app.schemas.job import JobCreate
 from app.services import capture_bundles, captures, handoff, jobs
 from app.services.errors import ConflictError, InvalidInputError, UnauthorizedError
 
@@ -81,7 +82,7 @@ def test_process_is_idempotent_and_selects_existing_recipe(monkeypatch: pytest.M
     monkeypatch.setattr(capture_bundles, "locked_capture", lambda *_: capture)
     job = Job(params=capture_bundles.PARAMS)
     create = Mock(return_value=job)
-    monkeypatch.setattr(jobs, "create_on_demand", create)
+    monkeypatch.setattr(jobs, "create_job", create)
     db.scalar.return_value = None
     assert capture_bundles.process(db, capture_id) is job
     payload = create.call_args.args[2]
@@ -91,7 +92,21 @@ def test_process_is_idempotent_and_selects_existing_recipe(monkeypatch: pytest.M
     assert capture_bundles.process(db, capture_id) is job
     create.assert_called_once()
     job.params = {}
-    assert capture_bundles.process(db, capture_id) is job
+    with pytest.raises(ConflictError):
+        capture_bundles.process(db, capture_id)
     file.status = UploadStatus.IN_PROGRESS
     with pytest.raises(ConflictError):
         capture_bundles.process(db, capture_id)
+
+
+def test_phone_bundle_uses_on_demand(monkeypatch: pytest.MonkeyPatch) -> None:
+    db = Mock(spec=Session)
+    cid = uuid.uuid4()
+    monkeypatch.setattr(capture_bundles, "completed_capture", Mock())
+    existing = Job()
+    create = Mock(return_value=existing)
+    monkeypatch.setattr(jobs, "create_on_demand", create)
+    assert capture_bundles.process(db, cid, phone=True) is existing
+    create.assert_called_once_with(
+        db, cid, JobCreate(recipe="photo-reconstruct", params=capture_bundles.PARAMS)
+    )

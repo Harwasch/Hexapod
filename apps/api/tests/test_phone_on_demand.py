@@ -94,8 +94,7 @@ def test_phone_upload_waits_for_refine_and_double_press_recovers_job(
     card = app_client.post(
         f"/api/v1/captures/{cid}/process", headers=ADMIN, json={"recipe": "photo-reconstruct"}
     )
-    assert card.status_code == 202, card.text
-    assert card.json()["id"] == first.json()["id"]
+    assert card.status_code == 409, card.text
     assert db.scalar(select(func.count()).select_from(Job)) == 1
 
 
@@ -185,3 +184,64 @@ def test_legacy_phone_process_is_idempotent(app_client: TestClient, db: Session)
         == str(uuid.uuid5(uuid.UUID(cid), "photo-reconstruct"))
     )
     assert db.scalar(select(func.count()).select_from(Job)) == 1
+
+
+@pytest.mark.parametrize("bundle", [False, True])
+def test_admin_process_preserves_new_run_options(
+    monkeypatch: pytest.MonkeyPatch, bundle: bool
+) -> None:
+    db = Mock(spec=Session)
+    cid = uuid.uuid4()
+    metadata = {"origin": "phone-key"}
+    if bundle:
+        metadata["bundleFormat"] = "hex-capture-v1"
+    monkeypatch.setattr(captures, "get_capture", Mock(return_value=Capture(metadata_=metadata)))
+    create = Mock(return_value=Job())
+    monkeypatch.setattr(jobs, "create_job", create)
+    monkeypatch.setattr(capture_bundles, "process", Mock(return_value=Job()))
+    monkeypatch.setattr(jobs, "create_on_demand", Mock(return_value=Job()))
+    monkeypatch.setattr(jobs, "job_to_read", Mock())
+    monkeypatch.setattr(worker_wake, "schedule", Mock())
+    payload = JobCreate(
+        recipe="photo-reconstruct",
+        params={"train": {"schedule_scale": 0.5}},
+        provider="modal",
+        tier="l4",
+    )
+    capture_routes.process_capture(cid, payload, db, BackgroundTasks())
+    create.assert_called_once_with(db, cid, payload)
+
+
+@pytest.mark.parametrize("bundle", [False, True])
+def test_admin_new_run_after_finished_phone_job_keeps_overrides(
+    app_client: TestClient, db: Session, bundle: bool
+) -> None:
+    from tests.test_phone import uploaded
+
+    if bundle:
+        cid = upload(app_client)
+    else:
+        cid = app_client.post("/api/v1/phone/captures", headers=PHONE, json={}).json()["capture"][
+            "id"
+        ]
+        uploaded(db, cid)
+        db.commit()
+    url = f"/api/v1/captures/{cid}/process"
+    first = app_client.post(url, headers=ADMIN, json={"recipe": "photo-reconstruct"})
+    assert first.status_code == 202, first.text
+    job = db.get(Job, uuid.UUID(first.json()["id"]))
+    assert job is not None
+    job.status = RunStatus.COMPLETE
+    db.commit()
+    payload = {
+        "recipe": "photo-reconstruct",
+        "params": {"train": {"schedule_scale": 0.5}},
+        "provider": "modal",
+        "tier": "l4",
+    }
+    second = app_client.post(url, headers=ADMIN, json=payload)
+    assert second.status_code == 202, second.text
+    assert second.json()["id"] != first.json()["id"]
+    for key, value in payload.items():
+        assert second.json()[key] == value
+    assert db.scalar(select(func.count()).select_from(Job)) == 2
