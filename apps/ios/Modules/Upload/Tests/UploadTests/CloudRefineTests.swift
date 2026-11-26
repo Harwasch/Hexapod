@@ -49,3 +49,15 @@ private actor StoredTransport: APITransport {
   #expect(await transport.paths.last == "/api/v1/captures/capture/process-bundle")
   #expect(try UploadState.load(from: directory.appendingPathComponent("upload.json")).jobID == "job")
 }
+
+#if os(Linux) || os(macOS)
+  @Test func uploadTestTargetDeclaresNetworkingDirectly() throws {
+    let package = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+      .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Package.swift")
+    let manifest = try String(contentsOf: package, encoding: .utf8)
+    let target = try #require(manifest.range(
+      of: #"\.testTarget\s*\(\s*name:\s*"UploadTests"\s*,\s*dependencies:\s*\[[^\]]*\]"#,
+      options: .regularExpression))
+    #expect(manifest[target].contains("\"Networking\""))
+  }
+#endif
