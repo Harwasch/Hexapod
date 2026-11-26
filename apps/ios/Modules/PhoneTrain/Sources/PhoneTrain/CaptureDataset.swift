@@ -41,10 +41,7 @@
           let dimensions = Self.dimensions(frame, maxSide: config.blurMaxSide)
           let rgb = try Self.raster(
             image, context: context, width: dimensions.0, height: dimensions.1)
-          let luma = stride(from: 0, to: rgb.count, by: 3).map {
-            (0.2126 * Double(rgb[$0]) + 0.7152 * Double(rgb[$0 + 1]) + 0.0722 * Double(rgb[$0 + 2]))
-              / 255
-          }
+          let luma = Keyframes.luma(rgb: rgb)
           scores[frame.index] = try Keyframes.blurScore(
             luma: luma, width: dimensions.0, height: dimensions.1)
         }
