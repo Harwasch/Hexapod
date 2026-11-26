@@ -78,6 +78,15 @@ private enum CameraStyle {
         GeometryReader { geometry in
           VStack {
             header(at: context.date)
+            if model.recording, let tip = model.scanGuidance.tip {
+              Label(tip.rawValue, systemImage: tip.symbol)
+                .font(.system(size: 15, weight: .semibold))
+                .padding(.horizontal, 15).padding(.vertical, 10)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(Capsule().stroke(.white.opacity(0.14), lineWidth: 1))
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                .accessibilityIdentifier("scan.tip")
+            }
             if showPerceptionPerformance {
               Text(
                 model.perceptionPerformance + "\n" + model.selectionDiagnostics + "\n"
@@ -124,11 +133,9 @@ private enum CameraStyle {
             if model.card == nil { controls }
           }
           .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 18)
+          .animation(.easeInOut(duration: 0.25), value: model.scanGuidance.tip)
 
         }
-      }
-      if model.recording, let renderer = model.liveSplat as? DefaultLiveSplatRenderer {
-        ScanInsetHost(renderer: renderer).ignoresSafeArea()
       }
       if let directory = model.savedCapture {
         CaptureUploadScreen(
@@ -186,12 +193,8 @@ private enum CameraStyle {
           ? "Recording, \(CapturePhase.time(model.capturePhase.elapsed(at: date)))"
           : model.siteName ?? "Choose site")
       Spacer()
-      if model.recording {
-        ProgressRing(progress: model.coverage).frame(width: 44, height: 44)
-          .accessibilityLabel("Current view coverage \(Int(model.coverage * 100)) percent")
-      } else {
-        icon("gearshape", label: "Settings", action: onSettings)
-      }
+      icon("gearshape", label: "Settings", action: onSettings)
+        .opacity(model.recording ? 0 : 1).disabled(model.recording)
     }
   }
 
@@ -218,7 +221,9 @@ private enum CameraStyle {
         .position(x: 34, y: 42)
         Button(action: model.toggleRecording) {
           ZStack {
-            MotionCueRing(level: model.recording ? model.motionLevel : .steady)
+            ScanCoverageRing(
+              sectors: model.recording ? model.scanGuidance.completedSectors : 0,
+              recording: model.recording)
             if model.recording {
               RoundedRectangle(cornerRadius: 8).fill(CameraStyle.red).frame(width: 32, height: 32)
             } else if model.capturePhase.isBusy {
@@ -230,7 +235,9 @@ private enum CameraStyle {
         }
         .accessibilityLabel(model.recording ? "Stop scan" : "Start scan")
         .accessibilityValue(
-          model.recording && model.motionLevel != .steady ? "Moving too fast" : ""
+          model.recording
+            ? "Viewpoints \(Int(model.scanGuidance.fraction * 100)) percent, \(model.scanGuidance.tip?.rawValue ?? "Scanning")"
+            : ""
         )
         .accessibilityIdentifier(model.recording ? "scan.stop" : "home.record")
         .disabled(
@@ -534,27 +541,33 @@ private struct ProgressRing: View {
   }
 }
 
-/// The record button's ring, coloured by predicted motion blur while scanning: white when
-/// steady (under 1 px), amber to slow down (1-3 px), red and pulsing when too fast. No text:
-/// the cue has to read at a glance while the phone is moving.
-private struct MotionCueRing: View {
-  let level: MotionBlurMeter.Level
+/// Each segment is one completed 15° viewpoint sector, independent of phone heading.
+private struct ScanCoverageRing: View {
+  let sectors: UInt32
+  let recording: Bool
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
-    let colour: Color =
-      switch level {
-      case .steady: .white
-      case .slowDown: CameraStyle.amber
-      case .tooFast: CameraStyle.red
+    ZStack {
+      Circle().stroke(.white.opacity(recording ? 0.2 : 0.9), lineWidth: 4)
+      if recording {
+        ForEach(0..<CoverageHash.sectorCount, id: \.self) { sector in
+          let filled = sectors & (UInt32(1) << sector) != 0
+          Circle().trim(
+            from: Double(sector) / Double(CoverageHash.sectorCount) + 0.004,
+            to: Double(sector + 1) / Double(CoverageHash.sectorCount) - 0.004
+          )
+          .stroke(
+            filled ? CameraStyle.teal : .white.opacity(0.13),
+            style: StrokeStyle(lineWidth: 4, lineCap: .round)
+          )
+          .shadow(color: filled ? CameraStyle.teal.opacity(0.35) : .clear, radius: 4)
+        }
+        .rotationEffect(.degrees(-90))
       }
-    Circle().stroke(colour, lineWidth: level == .steady ? 5 : 7)
-      .frame(width: 79, height: 79)
-      .phaseAnimator([1.0, 1.12]) { ring, scale in
-        ring.scaleEffect(level == .tooFast && !reduceMotion ? scale : 1)
-      } animation: { _ in
-        .easeInOut(duration: 0.3)
-      }
-      .animation(.easeOut(duration: 0.2), value: level)
+    }
+    .frame(width: 79, height: 79)
+    .animation(reduceMotion ? nil : .easeInOut(duration: 0.5), value: sectors)
+    .accessibilityHidden(true)
   }
 }

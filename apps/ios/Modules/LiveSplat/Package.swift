@@ -6,7 +6,7 @@ let package = Package(
   platforms: [.iOS("26.0"), .macOS(.v15)],
   products: [.library(name: "LiveSplat", targets: ["LiveSplat"])],
   targets: [
-    .target(name: "LiveSplat", resources: [.process("Shaders"), .process("Resources")]),
+    .target(name: "LiveSplat", resources: [.process("Shaders")]),
     .testTarget(name: "LiveSplatTests", dependencies: ["LiveSplat"]),
   ]
 )

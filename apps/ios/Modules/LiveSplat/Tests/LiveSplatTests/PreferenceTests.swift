@@ -108,21 +108,32 @@ import Testing
 @Test @MainActor func coveragePreferencePersistsIndependentlyAndKeepsActiveScan() async throws {
   let store = MemoryPreferenceStore()
   let preference = LiveSplatPreference(store: store)
-  #expect(preference.coverageEnabled)
+  #expect(preference.coverageColoursEnabled)
   let renderer = DefaultLiveSplatRenderer(preference: preference)
   renderer.start()
   let source = try FakeFrameSource.plane()
   renderer.ingest(try #require(await source.next()))
   let generation = renderer.sessionGeneration
   let count = renderer.splats.count
-  preference.coverageEnabled = false
-  #expect(!LiveSplatPreference(store: store).coverageEnabled)
-  preference.coverageEnabled = true
-  #expect(LiveSplatPreference(store: store).coverageEnabled)
+  preference.coverageColoursEnabled = false
+  #expect(!LiveSplatPreference(store: store).coverageColoursEnabled)
+  preference.coverageColoursEnabled = true
+  #expect(LiveSplatPreference(store: store).coverageColoursEnabled)
   #expect(
-    preference.previewEnabled && !preference.insetEnabled && preference.previewStyle == .discs)
+    preference.previewEnabled && preference.previewStyle == .discs)
   #expect(renderer.sessionGeneration == generation && renderer.splats.count == count)
   preference.previewEnabled = false
-  #expect(preference.coverageEnabled && renderer.status == .coverageOnly)
+  #expect(preference.coverageColoursEnabled && renderer.status == .coverageOnly)
   renderer.stop()
+}
+
+@Test @MainActor func stalePreferencesDoNotDisableNewColoursOrChangePreview() {
+  let store = MemoryPreferenceStore()
+  store.values["hex.liveSplat.coverageHairs"] = false
+  store.values["hex.liveSplat.inset"] = true
+  let preference = LiveSplatPreference(store: store)
+  #expect(preference.coverageColoursEnabled && preference.previewStyle == .discs)
+  preference.coverageColoursEnabled = false
+  #expect(!LiveSplatPreference(store: store).coverageColoursEnabled)
+  #expect(store.values["hex.liveSplat.inset"] == true)
 }

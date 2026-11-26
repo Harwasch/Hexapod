@@ -3,7 +3,7 @@ import Testing
 
 @testable import LiveSplat
 
-@Test func fiveMinuteGaussianAndInsetReferenceKeepsCapacityAndFrameBudget() throws {
+@Test func fiveMinuteGaussianReferenceKeepsCapacityAndFrameBudget() throws {
   var hash = GaussianVoxelHash(capacity: 1024)
   let seed = try #require(
     GaussianSeed.make(
@@ -12,7 +12,6 @@ import Testing
   let initialCells = hash.voxels.cells.count
   let initialSeeds = hash.seeds.count
   let start = DispatchTime.now().uptimeNanoseconds
-  var orbit = ScanOrbit()
   var order = (0..<128).map { GaussianSort.Entry(depth: Float($0 + 1), index: UInt32($0)) }
   // Same 3000-keyframe, 128-sample subset as the surfel regression. CPU reference
   // only: bounds fixed storage/work, never claims GPU fps or a resident-memory measurement.
@@ -23,8 +22,6 @@ import Testing
       hash.fuse(g, depth: 2, confidence: 2, epoch: UInt32(epoch))
     }
     GaussianSort.sort(&order)
-    orbit.rotate(horizontal: 0.001, vertical: 0)
-    #expect(orbit.angle(at: Double(epoch)).isFinite)
     #expect(hash.voxels.cells.count == initialCells && hash.seeds.count == initialSeeds)
   }
   let seconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
