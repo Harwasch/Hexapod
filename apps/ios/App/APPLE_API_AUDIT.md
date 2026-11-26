@@ -255,3 +255,47 @@ Risks in descending order:
    delivery and the immutable ARFrame transfer justify existing preconcurrency /
    unchecked boundaries. They require a device run for runtime validation;
    this compile-only review made no lifecycle or recording behavior changes.
+
+## Phone training Build A (2026-11-26)
+
+Source review only on Linux, without an Apple SDK or network. The five new
+Apple-only files are listed below. Public msplat signatures were checked against
+the local v3.0.0 Swift sources; the complete symbol/line inventory and acceptance
+limits are in [PhoneTrain](../Modules/PhoneTrain/README.md).
+
+- `Modules/PhoneTrain/Sources/PhoneTrain/CaptureDataset.swift`: actor-owned
+  `AVURLAsset`, awaited `loadTracks(withMediaType:)`, `AVAssetReader(asset:)`,
+  `AVAssetReaderTrackOutput`, `canAdd`, `add`, synchronous sample pull and reader
+  status/error/cancel. Track discovery uses the async API; reader pulls are in a
+  synchronous actor helper. CoreMedia timestamp conversion, CoreVideo dimensions,
+  `CIContext.createCGImage`, CoreGraphics raster drawing and ImageIO JPEG encoding
+  stay off MainActor. No synchronous AVAssetImageGenerator API or direct Metal
+  factory call is introduced. RGB orientation and iOS 26 reader annotations still
+  need an Apple build and a decoded phone fixture.
+- `Modules/PhoneTrain/Sources/PhoneTrain/PhoneTrainer.swift`: all session calls
+  await `MsplatRuntimeActor`; the session stays private. `ProcessInfo.thermalState`,
+  thermal notifications, `os_proc_available_memory`, actor-owned observer token,
+  `AsyncStream.makeStream`, termination callback, cooperative sleeps and atomic
+  checkpoint rename reviewed. No unchecked Sendable transfer of a session or
+  framework object. Step-boundary control is Linux tested; native lifecycle and
+  checkpoint semantics remain device checks.
+- `Modules/PhoneTrain/Sources/PhoneTrain/ProcessMemory.swift`: `task_info` with
+  `TASK_VM_INFO`, `mach_task_self_`, integer-rebound `task_vm_info_data_t` storage
+  and count in integer words. Failed queries return nil. Exact Darwin imports and
+  the runtime footprint measurement require Xcode/device verification.
+- `Modules/PhoneTrain/Sources/PhoneTrain/BenchmarkRunner.swift`: one current trainer,
+  forwarded activity/cancel, thermal notification and 250 ms memory timeline,
+  `uname`, actor-isolated JSON writes. Task captures only actor references and
+  Sendable values; native in-flight operations finish before critical stops.
+- `App/TrainBenchmarkScreen.swift`: MainActor SwiftUI `State`, `Environment` scene
+  phase, `Task`, detached Sendable capture inventory, `ForEach` enumerated rows,
+  `Label`, `ShareLink(item: URL)`, `onChange` and `onDisappear`. No GPU or decoding
+  work runs on MainActor. `App/DebugMenu.swift` adds a destination/label
+  `NavigationLink` gated by `hex.testflight.debugEnabled` inside the existing
+  Testing menu. `project.yml` enables Documents file sharing and open-in-place.
+
+`PhoneTrainPrep`, training policy, boundary policy and report models use only
+Foundation/Swift. The package's remote dependency is conditional on a macOS host;
+Linux package tests remain entirely local. Apple-only code is guarded by
+`canImport(Msplat)` and relevant Apple frameworks. There is no claim that Linux
+success type-checks SwiftUI, AVFoundation, Darwin or the binary framework.

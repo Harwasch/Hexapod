@@ -190,3 +190,40 @@ at completion.
 4. **Low: existing runtime concurrency assumptions.** Main-thread AR/Metal/location
    delegate delivery and the retained immutable ARFrame transfer justify the
    existing preconcurrency/unchecked boundaries; device validation remains necessary.
+
+## Phone training Build A (2026-11-26)
+
+The new module's Apple-only source inventory is complete in the
+[App API audit](App/APPLE_API_AUDIT.md#phone-training-build-a-2026-11-26).
+This is local source verification, without an Apple SDK or network:
+
+- `Modules/PhoneTrain/Sources/PhoneTrain/CaptureDataset.swift`: awaited AVAsset
+  track discovery followed by a synchronous actor-owned AVAssetReader pull loop;
+  CoreImage/CoreGraphics RGB scaling and ImageIO JPEG encoding. Verify iOS 26
+  AVAssetReader annotations, track Sendability, image orientation and pixel/depth
+  colour registration in Xcode and on a saved phone scan.
+- `Modules/PhoneTrain/Sources/PhoneTrain/PhoneTrainer.swift`: awaited session
+  creation, steps, metrics, evaluation, checkpoint, PLY, preview and close on
+  msplat's global runtime actor. Config/descriptor/telemetry values are Sendable
+  in the pinned library. No direct Metal factory is called; msplat owns Metal
+  creation. Private actor ownership, pause boundaries and auxiliary-operation
+  exclusion avoid concurrent native operations. Verify native checkpoint restore,
+  foreground transitions, cancellation, thermal stop and resource release on phone.
+- `Modules/PhoneTrain/Sources/PhoneTrain/ProcessMemory.swift`: task VM info pointer
+  rebinding and physical footprint. Confirm Darwin symbol imports/type layout
+  with the iOS 26 SDK and compare the report to Instruments.
+- `Modules/PhoneTrain/Sources/PhoneTrain/BenchmarkRunner.swift`: serial sweep,
+  thermal notifications and sampled timeline, `os_proc_available_memory`, `uname`,
+  actor-owned tasks and atomic JSON. Confirm peak sampling and critical detection
+  across native calls and suspension. No background training is scheduled.
+- `App/TrainBenchmarkScreen.swift`: MainActor SwiftUI, async detached inventory,
+  scene-phase forwarding, cooperative cancellation, icon rows and URL ShareLink.
+  `App/DebugMenu.swift` adds only the existing-style gated NavigationLink. Confirm
+  hidden access, latest-scan choice, Files visibility and share sheet on phone.
+
+`project.yml` wires local PhoneTrain and exact-version remote Msplat 3.0.0;
+`Modules/PhoneTrain/Package.swift` includes that remote only on macOS hosts.
+Verify XcodeGen package unification, binary linking and metallib packaging in the
+Apple build. Linux tests compile the pure prep/policy/report code, not these five
+Apple-only files. API source-file/line references, preset assumptions and the
+complete phone acceptance list are in [PhoneTrain](Modules/PhoneTrain/README.md).

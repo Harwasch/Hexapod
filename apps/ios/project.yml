@@ -25,6 +25,11 @@ packages:
     path: Modules/Capture
   LiveSplat:
     path: Modules/LiveSplat
+  PhoneTrain:
+    path: Modules/PhoneTrain
+  Msplat:
+    url: https://github.com/Plinth-it/msplat-ios
+    exactVersion: 3.0.0
   Voice:
     path: Modules/Voice
   Router:
@@ -68,6 +73,9 @@ targets:
       - package: Globe
       - package: Capture
       - package: LiveSplat
+      - package: PhoneTrain
+      - package: Msplat
+        product: Msplat
       - package: Voice
       - package: Router
       - package: Perception
@@ -97,6 +105,8 @@ targets:
         UIRequiredDeviceCapabilities:
           - arkit
         UILaunchScreen: {}
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
         # Standard HTTPS only: exempt, so builds skip the export-compliance question.
         ITSAppUsesNonExemptEncryption: false
         UISupportedInterfaceOrientations:

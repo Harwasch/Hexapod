@@ -183,6 +183,17 @@ import Voice
           }
           NavigationLink("Cesium globe with fixture data") { GlobeDebugView() }
         }
+        #if canImport(Msplat)
+          if testingEnabled {
+            Section {
+              NavigationLink {
+                TrainBenchmarkScreen()
+              } label: {
+                Label("Benchmark train", systemImage: "timer")
+              }
+            }
+          }
+        #endif
         Section("Run pieces alone") {
           NavigationLink("Voice") { VoiceDebugScreen() }
           NavigationLink("Router") { RouterDebugScreen() }
