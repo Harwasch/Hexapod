@@ -30,31 +30,7 @@
           if let report {
             VStack(spacing: 12) {
               ForEach(Array(report.runs.enumerated()), id: \.offset) { _, run in
-                HStack(spacing: 12) {
-                  Image(systemName: thermalIcon(run.worstThermal))
-                    .foregroundStyle(run.worstThermal >= 2 ? Color.orange : Color.secondary)
-                    .accessibilityLabel("Thermal state \(run.worstThermal)")
-                  VStack(alignment: .leading, spacing: 4) {
-                    Text(
-                      "\(run.configuration.maxGaussians / 1000)k · \(run.configuration.maxSide) px"
-                    )
-                    .font(.subheadline.monospacedDigit())
-                    HStack {
-                      metric("timer", run.totalSeconds.map { String(format: "%.1fs", $0) } ?? "—")
-                      metric(
-                        "memorychip",
-                        run.peakPhysicalFootprint.map { "\($0 / 1_048_576) MB" } ?? "—")
-                      metric("eye", run.psnr.map { String(format: "%.1f", $0) } ?? "—")
-                    }.font(.caption.monospacedDigit()).foregroundStyle(HexStyle.muted)
-                    if let error = run.error { Text(error).font(.caption).foregroundStyle(.orange) }
-                  }
-                  Spacer(minLength: 0)
-                  Image(
-                    systemName: run.status == "finished"
-                      ? "checkmark.circle" : "exclamationmark.circle"
-                  )
-                  .accessibilityLabel(run.status)
-                }
+                BenchmarkRunRow(run: run)
               }
             }.padding().background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16))
           }
@@ -75,17 +51,6 @@
       }
     }
 
-    private func metric(_ icon: String, _ value: String) -> some View {
-      Label(value, systemImage: icon)
-    }
-    private func thermalIcon(_ state: Int) -> String {
-      switch state {
-      case 3: "thermometer.sun.fill"
-      case 2: "thermometer.high"
-      case 1: "thermometer.medium"
-      default: "thermometer.low"
-      }
-    }
     private func start() {
       running = true
       report = nil
@@ -126,6 +91,67 @@
         polling = nil
         running = false
         work = nil
+      }
+    }
+  }
+
+  /// One benchmark run. Its own view with plainly typed values: the inline form, with
+  /// optional maps and `??` inside the screen's ForEach, risks Xcode's type-check timeout.
+  @MainActor private struct BenchmarkRunRow: View {
+    let run: BenchmarkRun
+
+    var body: some View {
+      HStack(spacing: 12) {
+        Image(systemName: thermalIcon)
+          .foregroundStyle(thermalColor)
+          .accessibilityLabel(Text("Thermal state \(run.worstThermal)"))
+        VStack(alignment: .leading, spacing: 4) {
+          Text(title).font(.subheadline.monospacedDigit())
+          HStack {
+            Label(seconds, systemImage: "timer")
+            Label(memory, systemImage: "memorychip")
+            Label(psnr, systemImage: "eye")
+          }
+          .font(.caption.monospacedDigit())
+          .foregroundStyle(HexStyle.muted)
+          if let error = run.error {
+            Text(error).font(.caption).foregroundStyle(Color.orange)
+          }
+        }
+        Spacer(minLength: 0)
+        Image(systemName: statusIcon).accessibilityLabel(Text(run.status))
+      }
+    }
+
+    private var title: String {
+      let thousands: Int = run.configuration.maxGaussians / 1000
+      let side: Int = run.configuration.maxSide
+      return "\(thousands)k · \(side) px"
+    }
+    private var seconds: String {
+      guard let value: Double = run.totalSeconds else { return "—" }
+      return String(format: "%.1fs", value)
+    }
+    private var memory: String {
+      guard let bytes: UInt64 = run.peakPhysicalFootprint else { return "—" }
+      return "\(bytes / 1_048_576) MB"
+    }
+    private var psnr: String {
+      guard let value: Float = run.psnr else { return "—" }
+      return String(format: "%.1f", Double(value))
+    }
+    private var statusIcon: String {
+      run.status == "finished" ? "checkmark.circle" : "exclamationmark.circle"
+    }
+    private var thermalColor: Color {
+      run.worstThermal >= 2 ? Color.orange : Color.secondary
+    }
+    private var thermalIcon: String {
+      switch run.worstThermal {
+      case 3: return "thermometer.sun.fill"
+      case 2: return "thermometer.high"
+      case 1: return "thermometer.medium"
+      default: return "thermometer.low"
       }
     }
   }
