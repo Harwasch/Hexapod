@@ -27,7 +27,7 @@
       try config.validate()
       let frames = try CaptureFrame.read(from: bundle)
       let asset = AVURLAsset(url: bundle.appendingPathComponent("rgb.mov"))
-      guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+      guard let track = try await asset.load(.tracks).first(where: { $0.mediaType == .video }) else {
         throw PrepError.invalid("Capture has no RGB track")
       }
       let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]

@@ -1,4 +1,4 @@
-#if canImport(Msplat) && canImport(Darwin)
+#if canImport(Msplat) && os(iOS)
   import Darwin
   import os
   import Foundation

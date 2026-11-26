@@ -27,7 +27,8 @@ public struct PhoneTrainingConfig: Codable, Sendable, Equatable {
 
   public func validate() throws {
     guard (2...1_000_000).contains(iterations), (0...4).contains(shDegree),
-      iterations > shDegree, (0...4).contains(numDownscales), resolutionSchedule > 0,
+      iterations > shDegree, (0...4).contains(numDownscales),
+      resolutionSchedule > (numDownscales > 0 ? 1 : 0),
       Int64(numDownscales) * Int64(resolutionSchedule) < Int64(iterations),
       (2...Int(Int32.max)).contains(maxGaussians), warmupLength >= 0,
       gpuStepTimeoutSeconds.isFinite, gpuStepTimeoutSeconds > 0,
@@ -35,6 +36,20 @@ public struct PhoneTrainingConfig: Codable, Sendable, Equatable {
       memoryBudgetFraction > 0, memoryBudgetFraction <= 1,
       seriousSleepMilliseconds <= 60_000
     else { throw PrepError.invalid("Invalid training policy") }
+  }
+
+  /// Resolution stages as msplat's fixed-interval scheduler sees them: the factor at
+  /// iteration i is 2^(numDownscales - i / S), with S the second stage's first iteration
+  /// (TrainingPlan.swift nativeDownscaleFactor), so every later stage must start on a
+  /// multiple of S. Call only after `validate()`.
+  public func resolutionStages() -> [(iterations: ClosedRange<Int32>, downscaleFactor: Int32)] {
+    (0...Int(numDownscales)).map { index in
+      let level = Int32(index)
+      let start = index == 0 ? 1 : level * resolutionSchedule
+      let end =
+        index == Int(numDownscales) ? iterations : (level + 1) * resolutionSchedule - 1
+      return (start...end, Int32(1) << (Int(numDownscales) - index))
+    }
   }
 
   public static func benchmark(maxGaussians: Int) -> Self {

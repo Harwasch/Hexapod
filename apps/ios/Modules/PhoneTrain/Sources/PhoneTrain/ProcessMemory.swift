@@ -1,4 +1,4 @@
-#if canImport(Msplat) && canImport(Darwin)
+#if canImport(Msplat) && os(iOS)
   import Darwin
 
   /// Independent task_vm_info sampling, matching the reference benchmark's native

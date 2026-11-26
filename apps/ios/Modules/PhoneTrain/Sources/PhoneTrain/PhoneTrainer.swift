@@ -1,4 +1,4 @@
-#if canImport(Msplat) && canImport(Darwin)
+#if canImport(Msplat) && os(iOS)
   import Darwin
   import os
   import Foundation
@@ -98,15 +98,9 @@
       -> Int64
     {
       try config.validate()
-      let stages = try (0...Int(config.numDownscales)).map { index in
-        let start = Int32(index) * config.resolutionSchedule + 1
-        let end =
-          index == Int(config.numDownscales)
-          ? config.iterations
-          : min(config.iterations, Int32(index + 1) * config.resolutionSchedule)
-        return try TrainingResolutionStage(
-          iterations: start...end,
-          downscaleFactor: Int32(1 << (Int(config.numDownscales) - index)))
+      let stages = try config.resolutionStages().map { stage in
+        try TrainingResolutionStage(
+          iterations: stage.iterations, downscaleFactor: stage.downscaleFactor)
       }
       return try TrainingPlan(
         inputDimensions: TrainingImageDimensions(width: dataset.width, height: dataset.height),
@@ -200,9 +194,9 @@
           }
         }
         guard let session else { throw PrepError.invalid("No session") }
-        let initialStep = await session.iteration
+        let initialStep = try await session.iteration
         var checkpointedPause = false
-        while await session.iteration < Int(config.iterations) {
+        while try await session.iteration < Int(config.iterations) {
           try Task.checkCancellation()
           if control.cancelled {
             emit("Cancelled")
@@ -310,7 +304,7 @@
       }
       let metadata = TrainingCheckpoint(
         capturePath: capture.path, prep: prep, training: config,
-        step: await session.iteration)
+        step: try await session.iteration)
       try JSONEncoder().encode(metadata).write(
         to: output.appendingPathComponent("checkpoint.json"), options: .atomic)
     }
