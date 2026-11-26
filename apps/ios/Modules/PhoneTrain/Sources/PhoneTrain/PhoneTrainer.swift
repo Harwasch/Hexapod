@@ -257,13 +257,13 @@
           if let value = completed.loss, value.isFinite { loss = value }
           var footprint: UInt64? = ProcessMemory.physicalFootprint()
           if footprint == nil { footprint = memory.processPhysicalFootprintBytes }
-          let available: UInt64 = UInt64(os_proc_available_memory())
-          let thermal: Int = ProcessInfo.processInfo.thermalState.rawValue
+          let availableNow: UInt64 = UInt64(os_proc_available_memory())
+          let thermalNow: Int = ProcessInfo.processInfo.thermalState.rawValue
           let sample = TrainSample(
             step: submitted.iteration, wallSeconds: now - stepStart, elapsedSeconds: elapsed,
             completedMilliseconds: completed.endToEndMs, gpuMilliseconds: completed.gpuExecutionMs,
             loss: loss, psnr: lastPSNR, splatCount: completed.splatCount, etaSeconds: eta,
-            physicalFootprint: footprint, availableMemory: available, thermalState: thermal)
+            physicalFootprint: footprint, availableMemory: availableNow, thermalState: thermalNow)
           samples.append(sample)
           emit("Training", sample: sample)
         }
