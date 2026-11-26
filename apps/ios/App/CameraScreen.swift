@@ -555,16 +555,7 @@ private struct ScanCoverageRing: View {
       Circle().stroke(.white.opacity(recording ? 0.2 : 0.9), lineWidth: 4)
       if recording {
         ForEach(0..<CoverageHash.sectorCount, id: \.self) { sector in
-          let filled = sectors & (UInt32(1) << sector) != 0
-          Circle().trim(
-            from: Double(sector) / Double(CoverageHash.sectorCount) + 0.004,
-            to: Double(sector + 1) / Double(CoverageHash.sectorCount) - 0.004
-          )
-          .stroke(
-            filled ? CameraStyle.teal : .white.opacity(0.13),
-            style: StrokeStyle(lineWidth: 4, lineCap: .round)
-          )
-          .shadow(color: filled ? CameraStyle.teal.opacity(0.35) : .clear, radius: 4)
+          sectorArc(sector)
         }
         .rotationEffect(.degrees(-90))
       }
@@ -572,5 +563,19 @@ private struct ScanCoverageRing: View {
     .frame(width: 79, height: 79)
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.5), value: sectors)
     .accessibilityHidden(true)
+  }
+
+  /// One sector of the ring, with typed values: inline mixed-type arithmetic inside the
+  /// ForEach is the kind of expression that times out Xcode's type checker.
+  private func sectorArc(_ sector: Int) -> some View {
+    let count: Double = Double(CoverageHash.sectorCount)
+    let start: Double = Double(sector) / count + 0.004
+    let end: Double = Double(sector + 1) / count - 0.004
+    let filled: Bool = sectors & (UInt32(1) << UInt32(sector)) != 0
+    let colour: Color = filled ? CameraStyle.teal : Color.white.opacity(0.13)
+    let glow: Color = filled ? CameraStyle.teal.opacity(0.35) : Color.clear
+    return Circle().trim(from: start, to: end)
+      .stroke(colour, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+      .shadow(color: glow, radius: 4)
   }
 }
