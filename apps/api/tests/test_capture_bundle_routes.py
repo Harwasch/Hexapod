@@ -14,9 +14,10 @@ from sqlalchemy.orm import Session
 from app.api.deps import require_write_or_phone_key, require_write_token
 from app.api.v1.captures import router
 from app.config import Settings
-from app.models import Capture, CaptureFile, Job
-from app.models.enums import CaptureKind, UploadStatus
+from app.models import Capture, CaptureFile, Job, JobStep
+from app.models.enums import CaptureKind, RunStatus, UploadStatus
 from app.schemas.capture import CaptureCreate
+from app.schemas.job import JobCreate
 from app.services import capture_bundles, captures, handoff, jobs
 from app.services.errors import ConflictError, InvalidInputError, UnauthorizedError
 
@@ -96,3 +97,57 @@ def test_process_is_idempotent_and_selects_existing_recipe(monkeypatch: pytest.M
     file.status = UploadStatus.IN_PROGRESS
     with pytest.raises(ConflictError):
         capture_bundles.process(db, capture_id)
+
+
+def test_phone_bundle_uses_on_demand(monkeypatch: pytest.MonkeyPatch) -> None:
+    db = Mock(spec=Session)
+    cid = uuid.uuid4()
+    monkeypatch.setattr(capture_bundles, "completed_capture", Mock())
+    existing = Job()
+    create = Mock(return_value=existing)
+    monkeypatch.setattr(jobs, "create_on_demand", create)
+    assert capture_bundles.process(db, cid, phone=True) is existing
+    create.assert_called_once_with(
+        db,
+        cid,
+        JobCreate(recipe="photo-reconstruct", params=capture_bundles.PARAMS),
+        retry_failed=True,
+    )
+
+
+@pytest.mark.parametrize("status", [RunStatus.ERROR, RunStatus.CANCELLED])
+@pytest.mark.parametrize("with_steps", [False, True])
+def test_phone_bundle_refine_retries_dead_job(
+    monkeypatch: pytest.MonkeyPatch, status: RunStatus, with_steps: bool
+) -> None:
+    db = Mock(spec=Session)
+    cid = uuid.uuid4()
+    steps = [JobStep(stage_id="normalize", ordinal=0, status=status)] if with_steps else []
+    job = Job(
+        id=uuid.uuid4(), capture_id=cid, status=status, steps=steps, params=capture_bundles.PARAMS
+    )
+    db.scalar.return_value = job
+    db.get.return_value = job
+    monkeypatch.setattr(capture_bundles, "completed_capture", Mock())
+    monkeypatch.setattr(jobs, "get_capture", Mock())
+    result = capture_bundles.process(db, cid, phone=True)
+    assert result is job
+    assert result.status == RunStatus.NOT_STARTED
+    assert all(step.status == RunStatus.NOT_STARTED for step in steps)
+    db.commit.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "status", [RunStatus.NOT_STARTED, RunStatus.IN_PROGRESS, RunStatus.COMPLETE]
+)
+def test_phone_bundle_refine_keeps_live_or_complete_job(
+    monkeypatch: pytest.MonkeyPatch, status: RunStatus
+) -> None:
+    db = Mock(spec=Session)
+    job = Job(id=uuid.uuid4(), status=status)
+    db.scalar.return_value = job
+    monkeypatch.setattr(capture_bundles, "completed_capture", Mock())
+    monkeypatch.setattr(jobs, "get_capture", Mock())
+    assert capture_bundles.process(db, uuid.uuid4(), phone=True) is job
+    assert job.status == status
+    db.commit.assert_not_called()

@@ -91,11 +91,19 @@ async function post<T>(
   bearer: string,
   path: string,
   body: unknown,
-  { unauthorized, upload }: { unauthorized: string; upload?: Upload },
+  {
+    unauthorized,
+    upload,
+    refine = false,
+  }: { unauthorized: string; upload?: Upload; refine?: boolean },
 ): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${bearer}`,
+      ...(refine ? { "X-Hex-Refine": "1" } : {}),
+    },
     body: JSON.stringify(body ?? {}),
   });
   const renewed = response.headers.get("x-handoff-token");
@@ -1047,6 +1055,7 @@ async function captureRow(ui: Ui, capture: Capture, job: Job | undefined): Promi
   const everything = capture.files.length > 0 && complete.length === capture.files.length;
 
   const process = (): void => {
+    if (!window.confirm("Refine in cloud? This starts paid GPU processing.")) return;
     const key = readStoredKey();
     if (!key) return;
     const recipe = classify(
@@ -1054,17 +1063,17 @@ async function captureRow(ui: Ui, capture: Capture, job: Job | undefined): Promi
     ).recipe;
     post<Job>(
       key,
-      `/api/v1/phone/captures/${capture.id}/process`,
-      { recipe, params: optionsParams(recipe) },
+      capture.metadata.bundleFormat === "hex-capture-v1"
+        ? `/api/v1/captures/${capture.id}/process-bundle`
+        : `/api/v1/phone/captures/${capture.id}/process`,
+      capture.metadata.bundleFormat === "hex-capture-v1"
+        ? undefined
+        : { recipe, params: optionsParams(recipe) },
       {
         unauthorized: KEY_WRONG,
+        refine: true,
       },
     )
-      .catch((error: unknown) => {
-        // Already running is not a failure: follow the run that is.
-        if (error instanceof ApiError && error.status === 409) return undefined;
-        throw error;
-      })
       .then(() => {
         follow(capture.id, ui);
         refreshMine(ui);
@@ -1084,6 +1093,7 @@ async function captureRow(ui: Ui, capture: Capture, job: Job | undefined): Promi
       { params: refineParams() },
       {
         unauthorized: KEY_WRONG,
+        refine: true,
       },
     )
       .then(() => {
@@ -1198,8 +1208,8 @@ async function captureRow(ui: Ui, capture: Capture, job: Job | undefined): Promi
     // capture, and it would be spent GPU time on a result nobody asked for.
     state.textContent = `Upload didn't finish · ${String(complete.length)} of ${String(capture.files.length)} files. Send it again.`;
   } else {
-    state.textContent = `Uploaded, not processed · ${String(complete.length)} files`;
-    row.append(rowButton("Process", process));
+    state.textContent = `Stored · ${String(complete.length)} files`;
+    row.append(rowButton("Refine in cloud", process));
   }
   return row;
 }
@@ -1220,7 +1230,7 @@ function tipsView(tips: { id: string; text: string }[]): HTMLElement {
   return box;
 }
 
-/** The phone key: start a capture here, upload it, and start processing it. */
+/** The phone key: upload a capture now; cloud refinement is an explicit action later. */
 function startWithKey(ui: Ui): void {
   if (ui.foot) {
     ui.foot.textContent =
@@ -1275,7 +1285,6 @@ function startWithKey(ui: Ui): void {
     const progress = new Map<File, FileProgress>();
     let upload: Upload | null = null;
     let located = false;
-    let processed = false;
 
     const attempt = async (): Promise<void> => {
       ui.input.disabled = true;
@@ -1300,26 +1309,13 @@ function startWithKey(ui: Ui): void {
       }
       const current = upload;
       await uploadAll(current, files, progress, ui);
-      if (!processed) {
-        ui.status.textContent = "Starting processing…";
-        await persist(ui, () =>
-          post<Job>(
-            key,
-            `/api/v1/phone/captures/${current.captureId}/process`,
-            { recipe: proposal.recipe, params: optionsParams(proposal.recipe) },
-            { unauthorized: KEY_WRONG },
-          ),
-        );
-        processed = true;
-      }
       setState(ui, "done");
       ui.input.disabled = false;
       ui.input.value = "";
-      ui.status.textContent = `${sent(files)} and processing has started. ${proposal.estimate}.`;
+      ui.status.textContent = `${sent(files)}. Stored in cloud.`;
       ui.detail.textContent = located
         ? "Placed where this phone is. You can close this page; it will be in Your captures."
         : "Location was not shared, so it is placed from the file (or where the map was).";
-      follow(current.captureId, ui);
       refreshMine(ui);
     };
 

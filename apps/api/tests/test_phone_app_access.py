@@ -26,7 +26,7 @@ from tests.test_quality_api import _finish
 
 KEY = "app-phone-key"
 WRITE = "test-write-token"
-PHONE = {"Authorization": f"Bearer {KEY}"}
+PHONE = {"Authorization": f"Bearer {KEY}", "X-Hex-Refine": "1"}
 ADMIN = {"Authorization": f"Bearer {WRITE}"}
 BUNDLE = {"name": "Phone bundle", "kind": "video"}
 FILE = {"filename": "capture.hexcap", "contentType": "application/x-hex-capture", "bytes": 3}
@@ -54,6 +54,7 @@ ALLOW = {
 
 
 def settings(**kwargs: Any) -> Settings:
+    kwargs.setdefault("phone_upload_auto_process", False)
     return Settings(
         _env_file=None,
         api_write_token=WRITE,

@@ -352,6 +352,30 @@ research request and confirm the endpoint becomes active, the request leaves the
 and the research machine stops again after completion plus five minutes. Repeat with a
 capture job. These are acceptance checks, not production observations from this change.
 
+Phone uploads store their archive without starting paid GPU work. `PHONE_UPLOAD_AUTO_PROCESS`
+defaults to `false` and is explicitly false in production's `fly.toml`. The existing capture
+status `not-started`, with completed files and no job, means **Stored**; no database migration
+or new wire status is needed. The native app and phone upload page no longer call a process
+endpoint automatically. **Refine in cloud** explicitly calls `POST /captures/{id}/process-bundle`
+for native archives or `/phone/captures/{id}/process` for web uploads. New initial jobs use
+`uuid5(capture_id, recipe)`; repeated requests recover the same job, including older random
+IDs. Existing queued/running jobs continue normally. The preview `/refine` action also returns
+its existing job while running, rather than creating another run.
+
+`PHONE_UPLOAD_AUTO_PROCESS=true` opts native phone bundles back into processing when their
+single archive completes; it does not auto-process administrative uploads or partial web
+photo sets. Keep it false for the manual-spend policy. Phone-key requests to
+`/captures/{id}/process-bundle` and `/phone/captures/{id}/process` must send
+`X-Hex-Refine: 1` while the flag is false. Missing or invalid headers receive 409,
+"Update the app to refine in the cloud", without creating a job. This blocks older
+clients' automatic process calls. Write-token/admin requests keep their existing behavior;
+`POST /captures/{id}/process` creates a new run with the operator's options. Explicit phone
+Refine retries failed or cancelled jobs in place and recovers running or complete jobs.
+The iOS confirmation's display estimate has one source,
+`CaptureStatus.cloudRefineEstimatedCost` in `apps/ios/App/Support/CaptureStatus.swift`.
+It is an estimate per scan, not a billing quote. Upload completion is persisted separately
+from the job ID, so stored uploads remain stored across app relaunches.
+
 **The worker side** (`app/worker/loop.py`):
 
 | Setting                       | `fly.toml` | Default | What it does                                                          |

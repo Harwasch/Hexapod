@@ -60,6 +60,7 @@ kill_timeout = "30s"
   strategy = "rolling"
 
 [env]
+  PHONE_UPLOAD_AUTO_PROCESS = "false"
   APP_ENV = "production"
   # Production refuses to start with neither TILES_BASE_URL nor OBJECT_STORAGE_* set
   # (app/main.py), and refuses to start without API_WRITE_TOKEN. The token and the

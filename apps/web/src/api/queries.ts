@@ -589,6 +589,7 @@ export const capturesApi = {
     unwrap<Job>(
       api.POST("/api/v1/captures/{capture_id}/process", {
         params: { path: { capture_id: captureId } },
+        headers: { "X-Hex-Refine": "1" },
         body,
       }),
     ),

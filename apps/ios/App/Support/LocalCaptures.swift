@@ -24,6 +24,7 @@ struct LocalCapture: Identifiable, Sendable {
     if let upload {
       if upload.lastError != nil { return "Retry" }
       if upload.jobID != nil { return "Uploaded" }
+      if upload.uploadComplete { return "Stored in cloud" }
       return "Uploading"
     }
     return "Local"

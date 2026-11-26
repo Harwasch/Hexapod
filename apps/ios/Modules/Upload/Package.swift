@@ -8,6 +8,6 @@ let package = Package(
   dependencies: [.package(path: "../Networking"), .package(path: "../Capture")],
   targets: [
     .target(name: "Upload", dependencies: ["Networking", "Capture"]),
-    .testTarget(name: "UploadTests", dependencies: ["Upload", "Capture"]),
+    .testTarget(name: "UploadTests", dependencies: ["Upload", "Capture", "Networking"]),
   ]
 )

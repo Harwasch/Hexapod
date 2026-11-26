@@ -22,12 +22,14 @@ from app.storage import S3Storage, get_storage
 
 KEY = "abcd-efgh-jkmn"
 WRITE = "the-write-token"
-PHONE = {"Authorization": f"Bearer {KEY}"}
+PHONE = {"Authorization": f"Bearer {KEY}", "X-Hex-Refine": "1"}
 
 
 @pytest.fixture
 def client(db: Session, storage: S3Storage) -> Iterator[TestClient]:
     settings = Settings(
+        _env_file=None,
+        phone_upload_auto_process=False,
         api_write_token=WRITE,
         # A low iteration count keeps the suite fast; the stored format is the real one.
         api_phone_key_hash=phone_key.hash_key(KEY, salt=b"0123456789abcdef", iterations=1000),

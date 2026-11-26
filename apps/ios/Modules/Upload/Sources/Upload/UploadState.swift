@@ -89,7 +89,10 @@ public struct UploadState: Codable, Equatable, Sendable {
   public var partSize: UInt64?
   public var completed: [CompletedPart] = []
   public var jobID: String?
+  /// Set only after the server acknowledges the completed archive. Optional for v1 files.
+  public var storedInCloud: Bool?
   public var lastError: String?
+  public var uploadComplete: Bool { storedInCloud == true || jobID != nil }
 
   public init(bundleID: UUID = UUID(), name: String, totalBytes: UInt64) throws {
     guard totalBytes > 0, !name.isEmpty else { throw UploadError.invalidState }

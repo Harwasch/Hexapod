@@ -330,7 +330,7 @@ test.describe("the phone upload page", () => {
     expect(completed).toHaveLength(3);
   });
 
-  test("with the key, a picked video becomes a placed capture and starts processing", async ({
+  test("with the key, a picked video is stored without starting cloud training", async ({
     page,
     context,
   }) => {
@@ -423,32 +423,11 @@ test.describe("the phone upload page", () => {
       buffer: Buffer.alloc(8, 5),
     });
 
-    await expect(page.locator("#status")).toContainText("processing has started", {
+    await expect(page.locator("#status")).toContainText("Stored in cloud", {
       timeout: 20_000,
     });
     expect(created).toEqual([{ lat: 44.9778, lon: -93.265, accuracyM: 7 }]);
-    // A new capture is processed as a preview first: a small, fixed forecast (its own
-    // frame and size limits, whatever the phone chose), a short training run, and the
-    // quality bar's forecast. "Best" and "2400 px" are for its Refine. "Full" detail is
-    // not sent: every scan is packaged whole, and Detail is this phone's own viewing
-    // budget, saved beside the other choices for the viewer and the map to read.
-    expect(processed).toEqual([
-      {
-        recipe: "photo-reconstruct",
-        params: {
-          normalize: {
-            max_side: 1600,
-            fps: 4,
-            keep: 100,
-            keep_video: 180,
-            max_candidates: 1200,
-            select: "viewpoint",
-          },
-          train: { schedule_scale: 0.1, cap_max: 200000, train_max_side: 800 },
-          quality: { mode: "preview", bar: "strict" },
-        },
-      },
-    ]);
+    expect(processed).toEqual([]);
     // Only the options that apply to a video are left showing.
     await expect(page.getByRole("radio", { name: "Y up" })).toBeHidden();
     // The first call used the token the capture came with; the next used the renewal.
@@ -654,6 +633,7 @@ test.describe("the phone upload page", () => {
     );
     const processed: string[] = [];
     await page.route("**/api/v1/phone/captures/*/process", async (route) => {
+      expect(route.request().headers()["x-hex-refine"]).toBe("1");
       processed.push(route.request().url());
       await route.fulfill({ status: 202, json: { id: "j", status: "not-started", steps: [] } });
     });
@@ -676,7 +656,7 @@ test.describe("the phone upload page", () => {
     await expect(row("Training")).toContainText("12 min");
     // 12 min of L4 at $0.80/h is $0.16, plus pose's recorded $0.002.
     await expect(row("Training")).toContainText("≈$0.16");
-    await expect(row("Training").getByRole("button", { name: "Process" })).toHaveCount(0);
+    await expect(row("Training").getByRole("button", { name: "Refine in cloud" })).toHaveCount(0);
     await expect(row("Training")).toContainText("about 20 min left");
     await expect(row("Training").getByRole("button", { name: "Progress" })).toBeVisible();
     // A running capture can be watched: cameras as they are solved, splats as they train.
@@ -707,7 +687,9 @@ test.describe("the phone upload page", () => {
     await expect(row("Half sent")).toContainText("Upload didn't finish");
     await expect(row("Half sent").getByRole("button")).toHaveCount(0);
 
-    await row("Never run").getByRole("button", { name: "Process" }).click();
+    await expect(row("Never run")).toContainText("Stored");
+    page.once("dialog", (dialog) => dialog.accept());
+    await row("Never run").getByRole("button", { name: "Refine in cloud" }).click();
     await expect.poll(() => processed.length).toBe(1);
     expect(processed[0]).toContain("/api/v1/phone/captures/idle/process");
   });

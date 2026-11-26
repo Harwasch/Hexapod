@@ -56,6 +56,7 @@ public actor BundleUploader {
   private let directory: URL
   private let apiBase: URL
   private let token: @Sendable () async throws -> String
+  private let transport: any APITransport
   private var state: UploadState
   private var background: URLSession?
   private var pumping = false
@@ -65,7 +66,8 @@ public actor BundleUploader {
   public init(
     directory: URL, archive: URL? = nil, name: String = "Capture",
     placement: BundlePlacementSource = .bundleGPS, siteID: UUID? = nil, apiBase: URL,
-    token: @escaping @Sendable () async throws -> String
+    token: @escaping @Sendable () async throws -> String,
+    transport: any APITransport = URLSessionAPITransport()
   ) throws {
     guard
       apiBase.scheme == "https"
@@ -74,6 +76,7 @@ public actor BundleUploader {
     self.directory = directory
     self.apiBase = apiBase
     self.token = token
+    self.transport = transport
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let stateURL = directory.appendingPathComponent("upload.json")
     let owned = directory.appendingPathComponent("capture.hexcap")
@@ -135,16 +138,17 @@ public actor BundleUploader {
   }
 
   private func request<Response: Decodable, Body: Encodable>(
-    _ path: String, method: String, body: Body, as: Response.Type
+    _ path: String, method: String, body: Body, as: Response.Type, refine: Bool = false
   ) async throws -> Response {
     var request = URLRequest(url: apiBase.appendingPathComponent(path))
     request.timeoutInterval = 90
     request.httpMethod = method
+    if refine { request.setValue("1", forHTTPHeaderField: "X-Hex-Refine") }
     request.setValue("Bearer " + (try await token()), forHTTPHeaderField: "Authorization")
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.httpBody = try JSONEncoder().encode(body)
-    let (data, response) = try await APISession.shared.data(for: request)
-    let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+    let (data, response) = try await transport.data(for: request)
+    let status = response.statusCode
     guard (200..<300).contains(status) else { throw UploadError.http(status) }
     return try JSONDecoder().decode(Response.self, from: data)
   }
@@ -168,8 +172,20 @@ public actor BundleUploader {
     } while pumpAgain
   }
 
+  /// An explicit, confirmed user action. The server recovers the same job on retries.
+  public func refineInCloud() async throws {
+    guard state.uploadComplete, let captureID = state.captureID else {
+      throw UploadError.invalidState
+    }
+    let job = try await request(
+      "captures/" + captureID + "/process-bundle", method: "POST",
+      body: [String: String](), as: Identifier.self, refine: true)
+    state.jobID = job.id
+    try save()
+  }
+
   private func pump() async throws {
-    guard state.jobID == nil else { return }
+    guard !state.uploadComplete else { return }
     let session = session()
     let tasks = await withCheckedContinuation { continuation in
       session.getAllTasks { continuation.resume(returning: $0) }
@@ -197,10 +213,7 @@ public actor BundleUploader {
     try save()
     let filePath = capturePath + "/files/" + file.id
     if file.status == "complete" {
-      let job = try await request(
-        capturePath + "/process-bundle", method: "POST",
-        body: [String: String](), as: Identifier.self)
-      state.jobID = job.id
+      state.storedInCloud = true
       state.lastError = nil
       try save()
       return

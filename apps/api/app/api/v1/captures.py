@@ -121,8 +121,19 @@ def complete_file(
     payload: CaptureFileComplete,
     db: DbSession,
     storage: Storage,
+    settings: SettingsDep,
+    background: BackgroundTasks,
 ) -> CaptureFileRead:
     file = capture_service.complete_file(db, storage, capture_id, file_id, payload)
+    capture = file.capture
+    if (
+        settings.phone_upload_auto_process
+        and capture.metadata_.get("origin") == phone_access.ORIGIN
+        and capture.metadata_.get("bundleFormat") == capture_bundles.FORMAT
+    ):
+        phone_access.check_run(db, capture)
+        capture_bundles.process(db, capture_id, phone=True)
+        worker_wake.schedule(background)
     return capture_service.file_to_read(file)
 
 
@@ -239,10 +250,15 @@ def register_bundle(
     summary="Queue or recover the bundle's reconstruction job",
 )
 def process_bundle(
-    capture_id: uuid.UUID, db: DbSession, background: BackgroundTasks, request: Request
+    capture_id: uuid.UUID,
+    db: DbSession,
+    background: BackgroundTasks,
+    request: Request,
+    settings: SettingsDep,
 ) -> JobRead:
     if request.state.api_credential == "phone":
+        phone_access.require_explicit_refine(request, settings)
         phone_access.check_run(db, capture_service.get_capture(db, capture_id))
-    job = capture_bundles.process(db, capture_id)
+    job = capture_bundles.process(db, capture_id, phone=request.state.api_credential == "phone")
     worker_wake.schedule(background)
     return job_service.job_to_read(job)

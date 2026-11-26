@@ -282,7 +282,7 @@ def test_running_means_a_live_lease(db: Session) -> None:
 # --- when the routes ask --------------------------------------------------------------
 
 KEY = "abcd-efgh-jkmn"
-PHONE = {"Authorization": f"Bearer {KEY}"}
+PHONE = {"Authorization": f"Bearer {KEY}", "X-Hex-Refine": "1"}
 
 
 @pytest.fixture

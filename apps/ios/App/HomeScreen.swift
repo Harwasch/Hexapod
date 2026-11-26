@@ -142,6 +142,9 @@ private enum HexStyle {
   @State var capture: CaptureRow
   @State private var player: AVPlayer?
   @State private var deleteConfirmation = false
+  @State private var refineConfirmation = false
+  @State private var refining = false
+  @State private var refineFailed = false
   @State private var deleteFailed = false
   @State private var connectionRetry = 0
   @State private var queue = CaptureUploadQueue.shared
@@ -168,6 +171,29 @@ private enum HexStyle {
         Text(capture.subtitle).font(.system(.caption, design: .monospaced))
           .foregroundStyle(HexStyle.muted)
         CaptureStatusPill(label: capture.status).accessibilityIdentifier("capture.status")
+        if CaptureStatus.refineVisible(upload: capture.local.upload, remote: capture.remote) {
+          Button {
+            refineConfirmation = true
+          } label: {
+            Label {
+              Text("Refine in cloud")
+            } icon: {
+              Image(systemName: "cloud").overlay(alignment: .topTrailing) {
+                Image(systemName: "sparkles").font(.system(size: 9)).offset(x: 5, y: -3)
+              }
+            }
+          }
+          .buttonStyle(.borderedProminent).frame(minHeight: 44)
+          .accessibilityIdentifier("capture.refine")
+          .disabled(
+            refining || !CaptureStatus.refineEnabled(
+              upload: capture.local.upload, remote: capture.remote,
+              unavailable: capture.serverUnavailable))
+        }
+        if refineFailed {
+          Label("Could not start refinement. Try again.", systemImage: "exclamationmark.icloud")
+            .font(.footnote)
+        }
         if capture.serverUnavailable {
           Button("Retry connection") {
             connectionRetry += 1
@@ -188,7 +214,7 @@ private enum HexStyle {
           Label("Not mapped yet", systemImage: "globe.americas")
             .foregroundStyle(HexStyle.muted).frame(minHeight: 44)
         }
-        if capture.local.upload?.jobID == nil {
+        if capture.local.upload?.uploadComplete != true {
           if APICredentials.token.isEmpty {
             NavigationLink("Sign in") { SettingsScreen(registry: registry) }.frame(minHeight: 44)
           } else {
@@ -214,6 +240,26 @@ private enum HexStyle {
     .navigationTitle("Scan").navigationBarTitleDisplayMode(.inline)
     .toolbar(.visible, for: .navigationBar)
     .accessibilityIdentifier("capture.detail")
+    .confirmationDialog(
+      "Refine in cloud?", isPresented: $refineConfirmation, titleVisibility: .visible
+    ) {
+      Button("Refine in cloud") {
+        refining = true
+        refineFailed = false
+        Task {
+          do {
+            try await CaptureUploadQueue.shared.refineInCloud(capture.local)
+            var updated = capture
+            await updated.refresh(configuration: registry.configuration)
+            capture = updated
+          } catch { refineFailed = true }
+          refining = false
+        }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("Estimated cost: \(CaptureStatus.cloudRefineEstimatedCost) per scan. Your upload is already stored.")
+    }
     .confirmationDialog(
       "Delete local scan?", isPresented: $deleteConfirmation, titleVisibility: .visible
     ) {
@@ -273,11 +319,14 @@ private struct CaptureStatusPill: View {
   let label: String
   private var color: Color {
     if label.hasPrefix("Failed") { return .red }
-    if label == "Ready" { return Color(red: 185 / 255, green: 196 / 255, blue: 106 / 255) }
+    if label == "Ready" || label == "Stored in cloud" {
+      return Color(red: 185 / 255, green: 196 / 255, blue: 106 / 255)
+    }
     return label.hasPrefix("Uploading") ? HexStyle.teal : HexStyle.amber
   }
   var body: some View {
-    Text(label).font(.system(size: 12, weight: .semibold, design: .monospaced))
+    Label(label, systemImage: CaptureStatus.symbol(label: label))
+      .font(.system(size: 12, weight: .semibold, design: .monospaced))
       .padding(.horizontal, 10).padding(.vertical, 5)
       .foregroundStyle(color).background(color.opacity(0.15), in: Capsule())
       .accessibilityLabel(label)
@@ -348,7 +397,7 @@ private struct CaptureRow: Identifiable, Sendable {
   }
 
   var uploadActive: Bool {
-    local.upload.map { $0.jobID == nil && $0.lastError == nil } ?? false
+    local.upload.map { !$0.uploadComplete && $0.lastError == nil } ?? false
   }
   var route: GlobeRoute? {
     CaptureStatus.trainedRoute(upload: local.upload, remote: remote)
@@ -360,7 +409,7 @@ private struct CaptureRow: Identifiable, Sendable {
       local = LocalCapture(directory: local.directory, upload: upload)
     }
     guard let base = configuration.apiRoot,
-      let id = local.upload?.captureID.flatMap(UUID.init(uuidString:)), local.upload?.jobID != nil
+      let id = local.upload?.captureID.flatMap(UUID.init(uuidString:)), local.upload?.uploadComplete == true
     else { return }
     do {
       remote = try await CatalogCaptureState.fetch(captureID: id, baseURL: base)
