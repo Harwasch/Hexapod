@@ -1,126 +1,69 @@
 import Foundation
 
-public struct CoverageKey: Equatable, Sendable {
-  public let xyz: SIMD3<Int32>
-  public init(position: SIMD3<Float>) {
-    xyz = SIMD3(
-      Int32(floor(position.x / CoverageHash.cellSize)),
-      Int32(floor(position.y / CoverageHash.cellSize)),
-      Int32(floor(position.z / CoverageHash.cellSize)))
-  }
-  public func bucket(count: Int) -> Int {
-    Int(
-      (UInt32(bitPattern: xyz.x) &* 73_856_093
-        ^ UInt32(bitPattern: xyz.y) &* 19_349_663
-        ^ UInt32(bitPattern: xyz.z) &* 83_492_791) % UInt32(count))
-  }
-}
-
-/// CPU oracle only. Live frames use CoverageMetalPass; no model readback.
-/// Four-way buckets evict the least observed slot. All storage is allocated once.
+/// Bounded 10 cm direction grid. The CPU implementation is a test oracle only;
+/// live frames use the identical four-way hash in the existing Metal command buffer.
 public struct CoverageHash: Sendable {
   public static let capacity = 32_768
   public static let cellSize: Float = 0.1
-  public static let maxDrawnHairs = 60_000
-  public private(set) var cells: [CoverageGPUCell]
-  public private(set) var keys: [CoverageKey?]
-  public private(set) var positions: [SIMD3<Float>]
-  private var firstDirections: [SIMD2<Int16>]
-  private var firstMasks: [UInt16]
-  public private(set) var count = 0
-  public let parameters: CoverageCreditParameters
-  public init(capacity: Int = Self.capacity, parameters: CoverageCreditParameters = .init()) {
+  public static let sectorCount = 24
+  public private(set) var cells: [Cell?]
+  public struct Cell: Sendable {
+    public var key: SIMD3<Int32>
+    public var azimuth: UInt32
+    public var elevation: UInt32
+    public var observations: UInt32
+    public var epoch: UInt32
+  }
+  public init(capacity: Int = Self.capacity) {
     precondition(capacity >= 4 && capacity % 4 == 0)
-    self.parameters = parameters
-    cells = Array(repeating: CoverageGPUCell(), count: capacity)
-    keys = Array(repeating: nil, count: capacity)
-    positions = Array(repeating: .zero, count: capacity)
-    firstDirections = Array(repeating: .zero, count: capacity * 14)
-    firstMasks = Array(repeating: 0, count: capacity)
+    cells = Array(repeating: nil, count: capacity)
   }
-  /// Fixed payload counts, not a process RSS measurement or Swift allocator overhead.
-  public var allocatedSlots: Int {
-    cells.count + keys.count + positions.count + firstDirections.count + firstMasks.count
+  public static func direction(_ offset: SIMD3<Float>) -> (azimuth: UInt32, elevation: UInt32) {
+    let length = sqrt(offset.x * offset.x + offset.y * offset.y + offset.z * offset.z)
+    guard length.isFinite, length > 0 else { return (0, 0) }
+    let angle = (atan2(offset.z, offset.x) + 2 * .pi).truncatingRemainder(dividingBy: 2 * .pi)
+    let az = min(sectorCount - 1, Int(angle * Float(sectorCount) / (2 * .pi)))
+    let elevation = asin(min(1, max(-1, offset.y / length))) * 180 / .pi
+    let band = elevation < -10 ? 0 : elevation < 20 ? 1 : elevation < 45 ? 2 : 3
+    return (1 << az, 1 << band)
   }
-  @discardableResult public mutating func observe(
-    position: SIMD3<Float>, normal: SIMD3<Float>, camera: SIMD3<Float>,
-    focalPixels: Float, epoch: UInt16
-  ) -> Int? {
-    let delta = camera - position
-    var distance = sqrt(CoverageCreditReference.dot(delta, delta))
+  public static func bucket(_ key: SIMD3<Int32>, count: Int) -> Int {
+    Int(
+      (UInt32(bitPattern: key.x) &* 73_856_093) ^ (UInt32(bitPattern: key.y) &* 19_349_663)
+        ^ (UInt32(bitPattern: key.z) &* 83_492_791)) % count
+  }
+  public mutating func observe(position: SIMD3<Float>, camera: SIMD3<Float>, epoch: UInt32) {
     guard position.x.isFinite, position.y.isFinite, position.z.isFinite,
-      max(abs(position.x), max(abs(position.y), abs(position.z))) < 1_000_000,
-      normal.x.isFinite, normal.y.isFinite, normal.z.isFinite,
-      CoverageCreditReference.dot(normal, normal) > 1e-12,
-      distance.isFinite, distance > 0, focalPixels.isFinite, focalPixels > 0
-    else { return nil }
-    let key = CoverageKey(position: position)
-    let start = key.bucket(count: cells.count / 4) * 4
+      max(abs(position.x), abs(position.y), abs(position.z)) < 1_000_000
+    else { return }
+    let key = SIMD3<Int32>(
+      Int32(floor(position.x / Self.cellSize)),
+      Int32(floor(position.y / Self.cellSize)), Int32(floor(position.z / Self.cellSize)))
+    let start = Self.bucket(key, count: cells.count / 4) * 4
     var slot = start
+    var found = false
     for i in start..<start + 4 {
-      if keys[i] == key {
+      guard let cell = cells[i] else {
         slot = i
         break
       }
-      if keys[i] == nil {
+      if cell.key == key {
         slot = i
+        found = true
         break
       }
-      if cells[i].viewCount < cells[slot].viewCount { slot = i }
+      if cell.epoch < (cells[slot]?.epoch ?? .max) { slot = i }
     }
-    let found = keys[slot] == key
-    if found && cells[slot].epoch == epoch { return slot }
-    var view = delta / distance
-    var n = CoverageCreditReference.unit(normal)
-    if found {
-      let previous = CoverageCreditReference.decodeNormal(cells[slot].normal)
-      if CoverageCreditReference.dot(n, previous) < 0 { n = -n }
-      n = CoverageCreditReference.unit(previous + (n - previous) * parameters.normalEMA)
-      positions[slot] += (position - positions[slot]) * parameters.normalEMA
-    } else {
-      if CoverageCreditReference.dot(n, view) < 0 { n = -n }
-      if keys[slot] == nil { count += 1 }
-      keys[slot] = key
-      positions[slot] = position
-      cells[slot] = CoverageGPUCell()
-      firstMasks[slot] = 0
-    }
-    var cell = cells[slot]
-    cell.normal = CoverageCreditReference.encodeNormal(n)
-    // Credit uses the same quantized mean normal as the GPU and the renderer.
-    n = CoverageCreditReference.decodeNormal(cell.normal)
-    let meanDelta = camera - positions[slot]
-    distance = sqrt(CoverageCreditReference.dot(meanDelta, meanDelta))
-    view = meanDelta / distance
-    let incidence = CoverageCreditReference.dot(n, view)
-    cell.viewCount = cell.viewCount == .max ? .max : cell.viewCount + 1
+    if found && cells[slot]!.epoch == epoch { return }
+    let center =
+      SIMD3<Float>(Float(key.x) + 0.5, Float(key.y) + 0.5, Float(key.z) + 0.5) * Self.cellSize
+    let masks = Self.direction(camera - center)
+    var cell =
+      found ? cells[slot]! : Cell(key: key, azimuth: 0, elevation: 0, observations: 0, epoch: 0)
+    cell.azimuth |= masks.azimuth
+    cell.elevation |= masks.elevation
+    cell.observations = min(32, cell.observations + 1)
     cell.epoch = epoch
-    if incidence > 0 {
-      let mm = distance * 1000 / focalPixels / incidence
-      cell.bestMmPerPx = cell.bestMmPerPx == 0 ? Float16(mm) : min(cell.bestMmPerPx, Float16(mm))
-      for h in 0..<parameters.hairs {
-        let cosine = CoverageCreditReference.dot(
-          view, CoverageCreditReference.hair(h, count: parameters.hairs, normal: n))
-        let credit = CoverageCreditReference.credit(
-          cosine: cosine, mmPerPx: mm, parameters: parameters)
-        guard credit > 0 else { continue }
-        let bit = UInt16(1) << h
-        if let separation = parameters.parallaxMinDeg {
-          if firstMasks[slot] & bit == 0 {
-            firstDirections[slot * 14 + h] = CoverageCreditReference.encodeNormal(view)
-            firstMasks[slot] |= bit
-          } else if CoverageCreditReference.dot(
-            view, CoverageCreditReference.decodeNormal(firstDirections[slot * 14 + h]))
-            <= cos(separation * .pi / 180)
-          {
-            cell.flags |= bit
-          }
-        }
-        cell[h] = CoverageCreditReference.creditedByte(
-          cell[h], credit: credit, viewsToFill: parameters.viewsToFill)
-      }
-    }
     cells[slot] = cell
-    return slot
   }
 }

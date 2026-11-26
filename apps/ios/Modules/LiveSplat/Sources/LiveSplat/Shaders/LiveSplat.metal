@@ -9,19 +9,46 @@ struct Uniforms {
   uint4 settings, flags;
 };
 constant uint capacity = 262144;
-struct OrbitUniforms { float4 controls, rect, phoneIntrinsics; };
-struct SceneBounds { float4 sumCount, lower, upper; };
+struct CoverageCell { int4 key; uint4 views; };
+struct CoverageStyle { float4 thresholds, timing, effects, tint; };
+struct CoverageSummary { float4 centerCount; uint4 counts; };
 struct SortEntry { float depth; uint index; };
-float4x4 previewView(constant Uniforms &u, device const SceneBounds *scene, constant OrbitUniforms &orbit) {
-  if (!(u.flags.w & 1u)) return u.view;
-  float4 centerRadius = scene[1024].sumCount;
-  float3 center = centerRadius.xyz;
-  float radius = max(0.5f, centerRadius.w);
-  float angle = orbit.controls.x, pitch = orbit.controls.y;
-  float3 eye = center + radius * 2.5f * float3(cos(pitch) * sin(angle), sin(pitch), cos(pitch) * cos(angle));
-  float3 z = normalize(eye - center), x = normalize(cross(float3(0, 1, 0), z)), y = cross(z, x);
-  return float4x4(float4(x.x, y.x, z.x, 0), float4(x.y, y.y, z.y, 0),
-    float4(x.z, y.z, z.z, 0), float4(-dot(x, eye), -dot(y, eye), -dot(z, eye), 1));
+constant uint coverageCapacity = 32768;
+constant float coverageCellSize = 0.1f;
+constant uint coverageSectors = 24;
+
+uint coarseBucket(int3 key) {
+  return ((uint(key.x) * 73856093u) ^ (uint(key.y) * 19349663u)
+    ^ (uint(key.z) * 83492791u)) % (coverageCapacity / 4);
+}
+float easeCoverage(float t) { t = clamp(t, 0.0f, 1.0f); return t * t * (3 - 2 * t); }
+float development(float4 animation, constant CoverageStyle &style) {
+  return mix(animation.x, animation.y, easeCoverage((style.timing.x - animation.z) / style.timing.y));
+}
+float coverageScore(Surfel cell, device const CoverageCell *coarse, constant CoverageStyle &style) {
+  int3 key = int3(floor(cell.positionRadius.xyz / coverageCellSize));
+  uint start = coarseBucket(key) * 4;
+  float spread = 0;
+  for (uint i = start; i < start + 4; ++i) {
+    if (coarse[i].views.z && all(coarse[i].key.xyz == key)) {
+      spread = max(float(popcount(coarse[i].views.x)) / style.thresholds.z,
+                   float(popcount(coarse[i].views.y)) / style.thresholds.w);
+    }
+  }
+  return easeCoverage(min(min(float(cell.state.x) / style.thresholds.x,
+                               float(cell.state.z) / style.thresholds.y), spread));
+}
+// Shared by Discs and Splat: gamma-space true colour develops out of a cool grey.
+float4 coverageAppearance(float3 color, float4 animation, float phase, constant CoverageStyle &style) {
+  if (style.effects.w < 0.5f) return float4(color, 1);
+  float p = development(animation, style);
+  float luminance = dot(color, float3(0.2126f, 0.7152f, 0.0722f));
+  float3 cool = luminance * 0.45f + style.tint.xyz * 0.55f;
+  float shimmer = sin(style.timing.x * 2 * M_PI_F / style.timing.w + phase) * style.effects.y * (1 - p);
+  float age = style.timing.x - animation.w;
+  float pulse = animation.w >= 0 && age >= 0 && age < style.timing.z
+    ? sin(M_PI_F * age / style.timing.z) * style.effects.z : 0;
+  return float4(mix(cool, color, p) + shimmer + pulse, mix(style.effects.x, 1.0f, p));
 }
 float4 previewPosition(float3 p, constant Uniforms &u) {
   float d = -p.z;
@@ -58,7 +85,8 @@ float3 rgb(float y, float2 cbcr, constant Uniforms &u) {
 // GPU memory is only accessed by subsequent encoders after fusion completes.
 kernel void fuseSurfels(device Surfel *cells [[buffer(0)]], device atomic_uint *locks [[buffer(1)]],
   device atomic_uint *counts [[buffer(2)]], constant Uniforms &u [[buffer(3)]],
-  device float4 *gaussians [[buffer(4)]],
+  device float4 *gaussians [[buffer(4)]], device const CoverageCell *coarse [[buffer(5)]],
+  device float4 *developed [[buffer(6)]], constant CoverageStyle &style [[buffer(7)]],
   texture2d<float, access::read> depth [[texture(0)]], texture2d<float, access::read> confidence [[texture(1)]],
   texture2d<float> yPlane [[texture(2)]], texture2d<float> cbcrPlane [[texture(3)]], uint id [[thread_position_in_grid]]) {
   if (id >= u.settings.x) return;
@@ -104,6 +132,15 @@ kernel void fuseSurfels(device Surfel *cells [[buffer(0)]], device atomic_uint *
   cell.state.y = u.settings.y;
   cell.state.z = certainty > 1.5f ? (found ? min(32u, cell.state.z + 1) : 1u) : 0u;
   cells[victim] = cell;
+  float4 animation = found ? developed[victim] : float4(0, 0, style.timing.x, -1);
+  float current = development(animation, style);
+  float target = max(animation.y, coverageScore(cell, coarse, style));
+  // Only retarget when credit changes; revisiting a mature cell cannot retrigger a pulse.
+  if (target > animation.y) {
+    if (target >= 1 && animation.y < 1) animation.w = style.timing.x + style.timing.y;
+    animation.xyz = float3(current, target, style.timing.x);
+  }
+  developed[victim] = animation;
   if (u.flags.w & 2u) {
     // Estimate the local tangent plane from adjacent valid depth samples. At image
     // edges/depth discontinuities use the viewing direction rather than bridging surfaces.
@@ -122,15 +159,17 @@ kernel void fuseSurfels(device Surfel *cells [[buffer(0)]], device atomic_uint *
   }
 
 }
-struct VertexOut { float4 position [[position]]; float size [[point_size]]; float3 color; float distance; };
+struct VertexOut { float4 position [[position]]; float size [[point_size]]; float3 color; float opacity; float distance; };
 vertex VertexOut surfelVertex(device const Surfel *cells [[buffer(0)]], constant Uniforms &u [[buffer(1)]],
-  device const SceneBounds *scene [[buffer(4)]], constant OrbitUniforms &orbit [[buffer(5)]], uint id [[vertex_id]]) {
+  device const float4 *developed [[buffer(6)]], constant CoverageStyle &style [[buffer(7)]], uint id [[vertex_id]]) {
   Surfel cell = cells[id * u.flags.x];
-  float3 p = (previewView(u, scene, orbit) * float4(cell.positionRadius.xyz, 1)).xyz;
+  float3 p = (u.view * float4(cell.positionRadius.xyz, 1)).xyz;
   float d = -p.z;
   VertexOut out;
   out.position = float4(2, 2, 2, 1); out.size = 1; out.color = cell.color.xyz; out.distance = d;
-  if ((u.flags.w & 1u) && cell.state.z < 2) out.color = mix(out.color, float3(0.05f, 0.9f, 0.75f), 0.65f);
+  float4 appearance = coverageAppearance(cell.color.xyz, developed[id * u.flags.x],
+    dot(cell.positionRadius.xyz, float3(0.7f, 0.3f, 0.5f)), style);
+  out.color = appearance.rgb; out.opacity = appearance.a;
   if (cell.state.x == 0 || d < 0.05f || d > 100) return out;
   float2 uv = float2(p.x, -p.y) * u.intrinsics.xy / d + u.intrinsics.zw;
   float3 q = float3(uv, 1);
@@ -149,36 +188,12 @@ fragment float4 surfelFragment(VertexOut in [[stage_in]], float2 point [[point_c
   float2 uv = float2(dot(u.inverseX.xyz, screen), dot(u.inverseY.xyz, screen));
   constexpr sampler nearest(filter::nearest, address::clamp_to_edge);
   float d = depth.sample(nearest, uv).r;
-  if (!(u.flags.w & 1u) && validDepth(d, confidence.sample(nearest, uv).r) && in.distance > d + max(0.03f, d * 0.02f)) discard_fragment();
-  float alpha = 0.94f * (1 - smoothstep(0.55f, 1.0f, r2));
+  if (validDepth(d, confidence.sample(nearest, uv).r) && in.distance > d + max(0.03f, d * 0.02f)) discard_fragment();
+  float alpha = in.opacity * (1 - smoothstep(0.55f, 1.0f, r2));
   if (alpha < 0.05f) discard_fragment();
   // Camera colour is gamma encoded; RealityKit's source/target are linear.
   float3 linear = select(in.color / 12.92f, pow((in.color + 0.055f) / 1.055f, float3(2.4f)), in.color > 0.04045f);
   return float4(linear * alpha, alpha);
-}
-// Coverage runs at the adaptive INTERNAL resolution, never a full-resolution hash walk.
-kernel void coverageScanPreview(device const Surfel *cells [[buffer(0)]], constant Uniforms &u [[buffer(1)]],
-  texture2d<float, access::write> target [[texture(0)]], texture2d<float> depth [[texture(1)]],
-  texture2d<float> confidence [[texture(2)]], uint2 pixel [[thread_position_in_grid]]) {
-  if (pixel.x >= target.get_width() || pixel.y >= target.get_height()) return;
-  float2 screen = (float2(pixel) + 0.5f) / float2(target.get_width(), target.get_height());
-  float3 q = float3(screen, 1);
-  float2 uv = float2(dot(u.inverseX.xyz, q), dot(u.inverseY.xyz, q));
-  constexpr sampler nearest(filter::nearest, address::clamp_to_edge);
-  float d = depth.sample(nearest, uv).r;
-  float4 tint = 0;
-  if (all(uv >= 0) && all(uv < 1) && validDepth(d, confidence.sample(nearest, uv).r)) {
-    // Match the integer depth pixel centres used by fusion.
-    float2 depthUV = floor(uv * u.dimensions.zw) / u.dimensions.zw;
-    int4 key = voxel(worldPoint(depthUV, d, u), d);
-    uint start = bucket(key) * 4;
-    bool covered = false;
-    for (uint i = start; i < start + 4; ++i) {
-      if (cells[i].state.z >= 2 && all(cells[i].key == key)) covered = true;
-    }
-    if (!covered) tint = float4(float3(0.03f, 0.45f, 0.40f) * 0.12f, 0.12f);
-  }
-  target.write(tint, pixel);
 }
 kernel void compositeScanPreview(texture2d<float, access::read> source [[texture(0)]],
   texture2d<float, access::write> target [[texture(1)]], texture2d<float> surfels [[texture(2)]],
@@ -190,34 +205,11 @@ kernel void compositeScanPreview(texture2d<float, access::read> source [[texture
   target.write(float4(preview.rgb + camera.rgb * (1 - preview.a), 1), pixel);
 }
 
-// Fixed work: 1024 partials of 256 cells, then a single small reduction. Geometry
-// never returns to the CPU. Bounds include all fused cells, independent of draw thinning.
-kernel void reduceScanScene(device const Surfel *cells [[buffer(0)]], device SceneBounds *scene [[buffer(1)]],
-  uint id [[thread_position_in_grid]]) {
-  if (id >= 1024) return;
-  float4 sum = 0; float3 lo = float3(INFINITY), hi = float3(-INFINITY);
-  for (uint i = id * 256; i < (id + 1) * 256; ++i) {
-    if (!cells[i].state.x) continue;
-    float3 p = cells[i].positionRadius.xyz;
-    sum += float4(p, 1); lo = min(lo, p); hi = max(hi, p);
-  }
-  scene[id].sumCount = sum; scene[id].lower = float4(lo, 0); scene[id].upper = float4(hi, 0);
-}
-kernel void finishScanScene(device SceneBounds *scene [[buffer(0)]], uint id [[thread_position_in_grid]]) {
-  if (id) return;
-  float4 sum = 0; float3 lo = float3(INFINITY), hi = float3(-INFINITY);
-  for (uint i = 0; i < 1024; ++i) {
-    sum += scene[i].sumCount;
-    lo = min(lo, scene[i].lower.xyz); hi = max(hi, scene[i].upper.xyz);
-  }
-  scene[1024].sumCount = sum.w > 0 ? float4(sum.xyz / sum.w, max(0.5f, length(hi - lo) * 0.5f)) : float4(0, 0, 0, 1);
-}
 kernel void prepareGaussianSort(device const Surfel *cells [[buffer(0)]], constant Uniforms &u [[buffer(1)]],
-  device SortEntry *order [[buffer(3)]], device const SceneBounds *scene [[buffer(4)]],
-  constant OrbitUniforms &orbit [[buffer(5)]], constant uint &count [[buffer(6)]], uint id [[thread_position_in_grid]]) {
+  device SortEntry *order [[buffer(3)]], constant uint &count [[buffer(6)]], uint id [[thread_position_in_grid]]) {
   if (id >= count) return;
   uint index = id * (capacity / count);
-  float d = -(previewView(u, scene, orbit) * float4(cells[index].positionRadius.xyz, 1)).z;
+  float d = -(u.view * float4(cells[index].positionRadius.xyz, 1)).z;
   order[id] = {cells[index].state.x && isfinite(d) && d > 0.05f && d <= 100 ? d : -INFINITY, index};
 }
 bool precedes(SortEntry a, SortEntry b) { return a.depth > b.depth || (a.depth == b.depth && a.index < b.index); }
@@ -237,18 +229,21 @@ struct GaussianOut {
 };
 vertex GaussianOut gaussianVertex(device const Surfel *cells [[buffer(0)]], constant Uniforms &u [[buffer(1)]],
   device const float4 *gaussians [[buffer(2)]], device const SortEntry *order [[buffer(3)]],
-  device const SceneBounds *scene [[buffer(4)]], constant OrbitUniforms &orbit [[buffer(5)]],
+  device const float4 *developed [[buffer(6)]], constant CoverageStyle &style [[buffer(7)]],
   uint vertexID [[vertex_id]], uint instance [[instance_id]]) {
   uint index = order[instance].index;
   Surfel cell = cells[index]; float4 attribute = gaussians[index];
-  float4x4 view = previewView(u, scene, orbit);
+  float4x4 view = u.view;
   float3 p = (view * float4(cell.positionRadius.xyz, 1)).xyz;
   float d = -p.z;
   GaussianOut out;
   out.position = float4(2, 2, 2, 1); out.offset = 0; out.conic = float3(1, 0, 1);
   out.color = cell.color.xyz; out.opacity = attribute.w; out.distance = d;
   if (!cell.state.x || !isfinite(order[instance].depth) || d <= 0.05f || d > 100) return out;
-  if ((u.flags.w & 1u) && cell.state.z < 2) out.color = mix(out.color, float3(0.05f, 0.9f, 0.75f), 0.65f);
+  float4 appearance = coverageAppearance(cell.color.xyz, developed[index],
+    dot(cell.positionRadius.xyz, float3(0.7f, 0.3f, 0.5f)), style);
+  out.color = appearance.rgb;
+  out.opacity = style.effects.w > 0.5f ? appearance.a : attribute.w;
   float3 n = (view * float4(attribute.xyz, 0)).xyz;
   float sigma = cell.positionRadius.w * 0.5f, thin = max(0.001f, sigma * 0.2f);
   // Sigma = s_t^2 I + (s_n^2-s_t^2) n n^T. Project with the
@@ -274,43 +269,72 @@ fragment float4 gaussianFragment(GaussianOut in [[stage_in]], constant Uniforms 
   texture2d<float> depth [[texture(0)]], texture2d<float> confidence [[texture(1)]]) {
   float power = in.conic.x * in.offset.x * in.offset.x + 2 * in.conic.y * in.offset.x * in.offset.y + in.conic.z * in.offset.y * in.offset.y;
   if (power > 9) discard_fragment();
-  if (!(u.flags.w & 1u)) {
+  {
     float3 q = float3(in.position.xy / u.dimensions.xy, 1);
     float2 uv = float2(dot(u.inverseX.xyz, q), dot(u.inverseY.xyz, q));
     constexpr sampler nearest(filter::nearest, address::clamp_to_edge);
     float d = depth.sample(nearest, uv).r;
     if (validDepth(d, confidence.sample(nearest, uv).r) && in.distance > d + max(0.03f, d * 0.02f)) discard_fragment();
   }
-  float alpha = min(0.95f, in.opacity * exp(-0.5f * power));
+  float alpha = min(1.0f, in.opacity * exp(-0.5f * power));
   if (alpha < 1.0f / 255) discard_fragment();
   float3 linear = select(in.color / 12.92f, pow((in.color + 0.055f) / 1.055f, float3(2.4f)), in.color > 0.04045f);
   return float4(linear * alpha, alpha);
 }
-struct FrustumOut { float4 position [[position]]; };
-vertex FrustumOut phoneFrustumVertex(constant Uniforms &u [[buffer(1)]], device const SceneBounds *scene [[buffer(4)]],
-  constant OrbitUniforms &orbit [[buffer(5)]], uint id [[vertex_id]]) {
-  // Four rays and four perimeter edges. Phone intrinsics are retained separately
-  // because the inset uses its own virtual pinhole camera.
-  const uint ends[16] = {0,1,0,2,0,3,0,4,1,2,2,4,4,3,3,1};
-  uint corner = ends[id];
-  float3 local = 0;
-  if (corner) {
-    float2 uv = float2((corner - 1) % 2, (corner - 1) / 2);
-    float2 xy = (uv - orbit.phoneIntrinsics.zw) * 0.4f / orbit.phoneIntrinsics.xy;
-    local = float3(xy.x, -xy.y, -0.4f);
+
+// High-confidence samples only. One winner per coarse bucket per keyframe;
+// the next encoder reads the completed masks, never a partly published record.
+kernel void observeCoverageCells(device CoverageCell *cells [[buffer(0)]],
+  device atomic_uint *claims [[buffer(1)]], constant Uniforms &u [[buffer(3)]],
+  texture2d<float, access::read> depth [[texture(0)]], texture2d<float, access::read> confidence [[texture(1)]],
+  uint id [[thread_position_in_grid]]) {
+  if (id >= u.settings.x) return;
+  uint stride = u.settings.z, columns = (depth.get_width() + stride - 1) / stride;
+  uint phase = u.settings.y % (stride * stride);
+  uint2 pixel = uint2(id % columns, id / columns) * stride + uint2(phase % stride, phase / stride);
+  if (pixel.x >= depth.get_width() || pixel.y >= depth.get_height()) return;
+  float d = depth.read(pixel).r;
+  if (!validDepth(d, confidence.read(pixel).r)) return;
+  float3 point = worldPoint(float2(pixel) / float2(depth.get_width(), depth.get_height()), d, u);
+  if (!all(isfinite(point)) || any(abs(point) >= 1000000)) return;
+  int3 key = int3(floor(point / coverageCellSize));
+  uint b = coarseBucket(key), expected = 0;
+  if (!atomic_compare_exchange_weak_explicit(claims + b, &expected, 1u, memory_order_relaxed, memory_order_relaxed)) return;
+  uint slot = b * 4; bool found = false;
+  for (uint i = b * 4; i < b * 4 + 4; ++i) {
+    if (!cells[i].views.z) { slot = i; break; }
+    if (all(cells[i].key.xyz == key)) { slot = i; found = true; break; }
+    if (cells[i].views.w < cells[slot].views.w) slot = i;
   }
-  float3 p = (previewView(u, scene, orbit) * u.world * float4(local, 1)).xyz;
-  FrustumOut out;
-  out.position = -p.z > 0.05f ? previewPosition(p, u) : float4(2, 2, 2, 1);
-  return out;
+  CoverageCell cell = cells[slot];
+  if (!found) { cell.key = int4(key, 0); cell.views = 0; }
+  float3 offset = u.world[3].xyz - (float3(key) + 0.5f) * coverageCellSize;
+  float distance = length(offset);
+  if (distance <= 0 || !isfinite(distance)) return;
+  float azimuth = fmod(atan2(offset.z, offset.x) + 2 * M_PI_F, 2 * M_PI_F);
+  uint sector = min(coverageSectors - 1, uint(azimuth * float(coverageSectors) / (2 * M_PI_F)));
+  float elevation = asin(clamp(offset.y / distance, -1.0f, 1.0f)) * 180 / M_PI_F;
+  uint band = elevation < -10 ? 0 : elevation < 20 ? 1 : elevation < 45 ? 2 : 3;
+  cell.views.x |= 1u << sector; cell.views.y |= 1u << band;
+  cell.views.z = min(32u, cell.views.z + 1); cell.views.w = u.settings.y;
+  cells[slot] = cell;
 }
-fragment float4 phoneFrustumFragment() { return float4(1, 0.55f, 0.08f, 1); }
-kernel void compositeScanInset(texture2d<float, access::write> target [[texture(0)]],
-  texture2d<float> inset [[texture(1)]], constant OrbitUniforms &orbit [[buffer(0)]], uint2 pixel [[thread_position_in_grid]]) {
-  if (pixel.x >= target.get_width() || pixel.y >= target.get_height()) return;
-  float2 uv = ((float2(pixel) + 0.5f) / float2(target.get_width(), target.get_height()) - orbit.rect.xy) / orbit.rect.zw;
-  if (any(uv < 0) || any(uv > 1)) return;
-  constexpr sampler linear(filter::linear, address::clamp_to_edge);
-  float4 value = inset.sample(linear, uv);
-  target.write(float4(value.rgb + float3(0.015f, 0.02f, 0.025f) * (1 - value.a), 1), pixel);
+kernel void reduceCoverageSummary(device const CoverageCell *cells [[buffer(0)]],
+  device CoverageSummary *summary [[buffer(1)]], constant CoverageStyle &style [[buffer(2)]],
+  uint id [[thread_position_in_grid]]) {
+  if (id >= 128) return;
+  float4 center = 0; uint poor = 0;
+  for (uint i = id * 256; i < (id + 1) * 256; ++i) {
+    if (!cells[i].views.z) continue;
+    center += float4((float3(cells[i].key.xyz) + 0.5f) * coverageCellSize, 1);
+    if (float(popcount(cells[i].views.x)) < style.thresholds.z && float(popcount(cells[i].views.y)) < style.thresholds.w) ++poor;
+  }
+  summary[id].centerCount = center; summary[id].counts = uint4(poor, 0, 0, 0);
+}
+kernel void finishCoverageSummary(device CoverageSummary *summary [[buffer(0)]], uint id [[thread_position_in_grid]]) {
+  if (id) return;
+  float4 center = 0; uint4 counts = 0;
+  for (uint i = 0; i < 128; ++i) { center += summary[i].centerCount; counts += summary[i].counts; }
+  if (center.w > 0) center.xyz /= center.w;
+  summary[128].centerCount = center; summary[128].counts = counts;
 }

@@ -25,7 +25,10 @@ import Voice
 @MainActor @Observable final class CameraModel: PushToTalkControl {
   private(set) var cameraReady = false
   private(set) var isTalking = false
-  private(set) var recording = false
+  private(set) var recording = false {
+    didSet { if recording != oldValue { scanGuidance = ScanGuidance() } }
+  }
+  private(set) var scanGuidance = ScanGuidance()
   /// The slow-down cue while recording: predicted motion blur (CaptureCamera, MotionBlurMeter).
   private(set) var motionLevel = MotionBlurMeter.Level.steady
   private(set) var failed = false
@@ -278,6 +281,13 @@ import Voice
         )
         renderer.pollSummary()
         scanCoverage = renderer.coverageFraction
+        let blur: Double = motionLevel == .steady ? 0 : motionLevel == .slowDown ? 1 : 2
+        let completed = scanGuidance.update(
+          renderer.processor?.guidanceSample, blur: blur,
+          now: ProcessInfo.processInfo.systemUptime)
+        if completed != 0 {
+          UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.45)
+        }
         if renderer.processor?.unavailable == true {
           failed = true
           failureText = "Preview unavailable"

@@ -69,14 +69,11 @@ import Voice
   defer { defaults.removePersistentDomain(forName: domain) }
   let preference = LiveSplatPreference(store: UserDefaultsLiveSplatStore(defaults: defaults))
   #expect(
-    preference.previewStyle == .discs && !preference.insetEnabled && preference.previewEnabled)
+    preference.previewStyle == .discs && preference.previewEnabled)
   preference.previewStyle = .splat
-  preference.insetEnabled = true
   let restored = LiveSplatPreference(store: UserDefaultsLiveSplatStore(defaults: defaults))
-  #expect(restored.previewStyle == .splat && restored.insetEnabled)
+  #expect(restored.previewStyle == .splat)
   #expect(restored.previewEnabled)
-  preference.insetEnabled = false
-  #expect(restored.previewStyle == .splat && !restored.insetEnabled)
   let renderer = DefaultLiveSplatRenderer(preference: preference)
   renderer.start()
   let source = try FakeFrameSource.plane(frameCount: 2)
@@ -102,17 +99,17 @@ import Voice
   let renderer = try #require(
     try registry.splatRenderers.resolve("real") as? DefaultLiveSplatRenderer)
   // On by default: the coverage cue is what a new scanner should see without opening Settings.
-  #expect(renderer.preference.coverageEnabled)
+  #expect(renderer.preference.coverageColoursEnabled)
   renderer.start()
-  preference.coverageEnabled = false
+  preference.coverageColoursEnabled = false
   let restored = LiveSplatPreference(store: UserDefaultsLiveSplatStore(defaults: defaults))
-  #expect(!restored.coverageEnabled && !renderer.preference.coverageEnabled)
-  preference.coverageEnabled = true
-  #expect(restored.coverageEnabled && renderer.preference.coverageEnabled)
-  #expect(restored.previewEnabled && !restored.insetEnabled && restored.previewStyle == .discs)
+  #expect(!restored.coverageColoursEnabled && !renderer.preference.coverageColoursEnabled)
+  preference.coverageColoursEnabled = true
+  #expect(restored.coverageColoursEnabled && renderer.preference.coverageColoursEnabled)
+  #expect(restored.previewEnabled && restored.previewStyle == .discs)
   #expect(try registry.splatRenderers.resolve("real") === renderer)
   #expect(renderer.status == .scanPreview)
-  preference.coverageEnabled = false
-  #expect(!restored.coverageEnabled)
+  preference.coverageColoursEnabled = false
+  #expect(!restored.coverageColoursEnabled)
   renderer.stop()
 }

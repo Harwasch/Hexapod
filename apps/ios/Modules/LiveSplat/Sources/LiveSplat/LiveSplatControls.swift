@@ -35,13 +35,10 @@
         }
       }
       Toggle(
-        "Inset",
+        "Coverage colours",
         isOn: Binding(
-          get: { preference.insetEnabled }, set: { preference.insetEnabled = $0 }))
-      Toggle(
-        "Coverage",
-        isOn: Binding(
-          get: { preference.coverageEnabled }, set: { preference.coverageEnabled = $0 }))
+          get: { preference.coverageColoursEnabled },
+          set: { preference.coverageColoursEnabled = $0 }))
     }
   }
 #endif
