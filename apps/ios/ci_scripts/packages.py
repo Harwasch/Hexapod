@@ -46,7 +46,11 @@ def run_packages(mode, ios=IOS, destination=None):
                 if mode == 'test' and not any(t['type'] == 'test' for t in package['targets']):
                     rows.append(f'| {label} | No test targets |')
                     continue
-                scheme = package['name']
+                # Xcode names a package's scheme after the package only when it has a
+                # single product; with several it is `<name>-Package`, and only that
+                # one carries the test action (PhoneTrain: PhoneTrainPrep + PhoneTrain).
+                multiple = len(package.get('products', [])) > 1
+                scheme = f"{package['name']}-Package" if multiple else package['name']
                 command = [
                     'xcodebuild', mode, '-scheme', scheme,
                     '-destination', destination or 'generic/platform=iOS Simulator',
