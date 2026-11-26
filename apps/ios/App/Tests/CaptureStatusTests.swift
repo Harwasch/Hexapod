@@ -73,3 +73,16 @@ import Upload
   }
   #expect(CaptureStatus.trainedRoute(upload: upload, remote: nil) == nil)
 }
+
+@Test func failedCloudRefinementCanBeRequestedAgain() throws {
+  var upload = try UploadState(name: "Scan", totalBytes: 100)
+  upload.captureID = UUID().uuidString
+  upload.storedInCloud = true
+  upload.jobID = UUID().uuidString
+  for status in ["error", "cancelled"] {
+    let remote = try JSONDecoder().decode(
+      CatalogCaptureState.self,
+      from: Data("{\"status\":\"not-started\",\"jobs\":[{\"status\":\"\(status)\",\"createdAt\":\"2026\",\"steps\":[]}]}".utf8))
+    #expect(CaptureStatus.refineEnabled(upload: upload, remote: remote, unavailable: false))
+  }
+}

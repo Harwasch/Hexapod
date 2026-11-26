@@ -19,7 +19,9 @@ enum CaptureStatus {
     upload: UploadState?, remote: CatalogCaptureState?, unavailable: Bool
   ) -> Bool {
     refineVisible(upload: upload, remote: remote) && !unavailable && remote != nil
-      && !jobRunning(remote) && remote?.status == "not-started" && upload?.jobID == nil
+      && !jobRunning(remote)
+      && (remote?.label.hasPrefix("Failed") == true
+        || (remote?.status == "not-started" && upload?.jobID == nil))
   }
   static func symbol(label: String) -> String {
     label == "Stored in cloud" ? "checkmark.icloud" : "icloud"

@@ -109,7 +109,7 @@ def process(db: Session, capture_id: uuid.UUID, *, phone: bool = False) -> Job:
     completed_capture(db, capture_id)
     if phone:
         return jobs.create_on_demand(
-            db, capture_id, JobCreate(recipe="photo-reconstruct", params=PARAMS)
+            db, capture_id, JobCreate(recipe="photo-reconstruct", params=PARAMS), retry_failed=True
         )
     existing = db.scalar(
         select(Job)

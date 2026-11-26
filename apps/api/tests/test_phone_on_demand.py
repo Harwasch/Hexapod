@@ -245,3 +245,22 @@ def test_admin_new_run_after_finished_phone_job_keeps_overrides(
     for key, value in payload.items():
         assert second.json()[key] == value
     assert db.scalar(select(func.count()).select_from(Job)) == 2
+
+
+@pytest.mark.parametrize("status", [RunStatus.ERROR, RunStatus.CANCELLED])
+def test_phone_bundle_refine_requeues_dead_job_in_place(
+    app_client: TestClient, db: Session, status: RunStatus
+) -> None:
+    cid = upload(app_client)
+    url = f"/api/v1/captures/{cid}/process-bundle"
+    first = app_client.post(url, headers=PHONE)
+    assert first.status_code == 202, first.text
+    job = db.get(Job, uuid.UUID(first.json()["id"]))
+    assert job is not None
+    job.status = status
+    db.commit()
+    retried = app_client.post(url, headers=PHONE)
+    assert retried.status_code == 202, retried.text
+    assert retried.json()["id"] == first.json()["id"]
+    assert retried.json()["status"] == "not-started"
+    assert db.scalar(select(func.count()).select_from(Job)) == 1
