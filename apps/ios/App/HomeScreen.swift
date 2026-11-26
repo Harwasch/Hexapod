@@ -36,7 +36,8 @@ enum UIFixtureLaunch {
   }
 }
 
-private enum HexStyle {
+/// Shared with the hidden benchmark screen, so not file-private.
+enum HexStyle {
   static let background = Color(red: 13 / 255, green: 21 / 255, blue: 23 / 255)
   static let panel = Color(red: 20 / 255, green: 32 / 255, blue: 35 / 255)
   static let text = Color(red: 228 / 255, green: 236 / 255, blue: 233 / 255)
