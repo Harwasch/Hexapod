@@ -2,7 +2,9 @@
 
 Run from the repository root with the installed Swift toolchain (Swift 6.2 on
 Linux; Xcode 26 on macOS). No downloads, services, credentials or phone are needed
-for these package tests. All package dependencies are local. On this Linux host,
+for these Linux package tests. Dependencies are local on Linux; PhoneTrain adds
+an Apple-host-only exception for pinned msplat-ios 3.0.0 (binary framework and
+metallibs). Apple package builds need that dependency resolved. On this Linux host,
 first run `. ~/hw-tools/swift/env.sh`.
 
 Create the local temporary directories once:
@@ -286,3 +288,29 @@ pnpm format:check
 Device-only acceptance still includes sustained 60 Hz display, ≤0.5 ms delegate
 latency under load, memory plateau, thermals, quality recovery, alignment/occlusion,
 visual density and real-bundle frame counts. Linux cannot substitute for these checks.
+
+## Phone training Build A
+
+PhoneTrain's Foundation-only dataset preparation and training/report policy tests
+need no network or Apple framework. Keep scratch and temporary files in the
+worktree; `.build` is not git-ignored and must never be staged. Remove scratch
+before running Prettier, which otherwise scans its generated manifests.
+
+```bash
+. ~/hw-tools/swift/env.sh
+mkdir -p .build/tmp
+TMPDIR="$PWD/.build/tmp" swift test --package-path apps/ios/Modules/PhoneTrain \
+  --scratch-path "$PWD/.build/swift/PhoneTrain" --jobs 2 --disable-sandbox
+TMPDIR="$PWD/.build/tmp" swift test --package-path apps/ios/App \
+  --scratch-path "$PWD/.build/swift/App" --jobs 2 --disable-sandbox
+TMPDIR="$PWD/.build/tmp" python3 -m unittest discover -s apps/ios/ci_scripts
+```
+
+Settings → Testing → **Benchmark train** is present only with
+`hex.testflight.debugEnabled`. It measures the latest finalized local capture,
+not a replay provider. Reports go to Documents and can be shared; PLY/checkpoints
+live beside Captures in Application Support/PhoneTrain. Preset time budgets,
+quality, actual cap growth, memory headroom, thermal handling and checkpoint
+recovery remain phone measurements. See the [module README](Modules/PhoneTrain/README.md)
+for the sweep, complete Apple-only inventory, pinned source API references and
+phone acceptance steps. No user-facing post-scan training UI is included.
