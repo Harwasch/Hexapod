@@ -5,6 +5,40 @@ import Upload
 
 @testable import AppSupport
 
+@Test func storedUploadMapsToCloudCheckAndRefineWaitsForCompletion() throws {
+  var upload = try UploadState(name: "Scan", totalBytes: 100)
+  upload.captureID = UUID().uuidString
+  #expect(!CaptureStatus.refineVisible(upload: upload, remote: nil))
+  upload.storedInCloud = true
+  let stored = try JSONDecoder().decode(
+    CatalogCaptureState.self, from: Data("{\"status\":\"not-started\",\"jobs\":[]}".utf8))
+  #expect(CaptureStatus.label(upload: upload, remote: stored, unavailable: false) == "Stored in cloud")
+  #expect(CaptureStatus.symbol(label: "Stored in cloud") == "checkmark.icloud")
+  #expect(CaptureStatus.refineVisible(upload: upload, remote: stored))
+  #expect(CaptureStatus.refineEnabled(upload: upload, remote: stored, unavailable: false))
+  #expect(!CaptureStatus.refineEnabled(upload: upload, remote: stored, unavailable: true))
+  let local = LocalCapture(directory: URL(fileURLWithPath: "/fixture"), upload: upload)
+  #expect(local.status == "Stored in cloud")
+  for status in ["not-started", "in-progress"] {
+    let running = try JSONDecoder().decode(
+      CatalogCaptureState.self,
+      from: Data("{\"status\":\"not-started\",\"jobs\":[{\"status\":\"\(status)\",\"createdAt\":\"2026\",\"steps\":[]}]}".utf8))
+    #expect(CaptureStatus.refineVisible(upload: upload, remote: running))
+    #expect(!CaptureStatus.refineEnabled(upload: upload, remote: running, unavailable: false))
+    #expect(CaptureStatus.label(upload: upload, remote: running, unavailable: false) == "Processing")
+  }
+  upload.jobID = UUID().uuidString
+  #expect(!CaptureStatus.refineEnabled(upload: upload, remote: nil, unavailable: false))
+  let training = try JSONDecoder().decode(
+    CatalogCaptureState.self,
+    from: Data("{\"status\":\"in-progress\",\"jobs\":[{\"status\":\"in-progress\",\"createdAt\":\"2026\",\"steps\":[{\"stageId\":\"train\",\"status\":\"in-progress\",\"ordinal\":1,\"metrics\":{}}]}]}".utf8))
+  #expect(CaptureStatus.label(upload: upload, remote: training, unavailable: false) == "Training")
+  #expect(!CaptureStatus.refineEnabled(upload: upload, remote: training, unavailable: false))
+  let ready = try JSONDecoder().decode(
+    CatalogCaptureState.self, from: Data("{\"status\":\"complete\",\"jobs\":[]}".utf8))
+  #expect(!CaptureStatus.refineVisible(upload: upload, remote: ready))
+}
+
 @Test func uploadPercentageNeverClaimsTrainingOrQueuesUnknownServerState() throws {
   #expect(CaptureStatus.label(upload: nil, remote: nil, unavailable: false) == "Connecting…")
   var upload = try UploadState(name: "Scan", totalBytes: 100)

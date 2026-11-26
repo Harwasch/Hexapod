@@ -431,6 +431,9 @@ private struct ProgressRing: View {
               .foregroundStyle(CameraStyle.muted)
             if state?.jobID != nil {
               Text("Refining").font(.caption).foregroundStyle(CameraStyle.teal)
+            } else if state?.uploadComplete == true {
+              Label("Stored in cloud", systemImage: "checkmark.icloud")
+                .font(.caption).foregroundStyle(CameraStyle.teal)
             }
           }
           Spacer(minLength: 0)

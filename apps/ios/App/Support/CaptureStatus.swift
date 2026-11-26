@@ -4,6 +4,26 @@ import Upload
 
 /// Upload bytes describe transfer only; reconstruction always comes from the server.
 enum CaptureStatus {
+  /// Display estimate per scan, not a quote; keep confirmation copy sourced here.
+  static let cloudRefineEstimatedCost = "$1-3"
+
+  private static func jobRunning(_ remote: CatalogCaptureState?) -> Bool {
+    // Globe's catalog label already follows the latest job and active training step.
+    remote?.jobs?.isEmpty == false
+      && (remote?.label == "Processing" || remote?.label.hasPrefix("Training") == true)
+  }
+  static func refineVisible(upload: UploadState?, remote: CatalogCaptureState?) -> Bool {
+    upload?.uploadComplete == true && upload?.captureID != nil && remote?.status != "complete"
+  }
+  static func refineEnabled(
+    upload: UploadState?, remote: CatalogCaptureState?, unavailable: Bool
+  ) -> Bool {
+    refineVisible(upload: upload, remote: remote) && !unavailable && remote != nil
+      && !jobRunning(remote) && remote?.status == "not-started" && upload?.jobID == nil
+  }
+  static func symbol(label: String) -> String {
+    label == "Stored in cloud" ? "checkmark.icloud" : "icloud"
+  }
   static func trainedRoute(upload: UploadState?, remote: CatalogCaptureState?) -> GlobeRoute? {
     guard remote?.status == "complete", let siteID = remote?.siteId,
       let scanID = upload?.captureID.flatMap(UUID.init(uuidString:))
@@ -13,8 +33,12 @@ enum CaptureStatus {
   static func label(upload: UploadState?, remote: CatalogCaptureState?, unavailable: Bool) -> String
   {
     guard let upload else { return "Connecting…" }
-    if upload.jobID != nil {
-      return unavailable ? "Connection unavailable" : (remote?.label ?? "Connecting…")
+    if upload.uploadComplete {
+      if unavailable { return "Connection unavailable" }
+      if upload.jobID == nil, remote?.status == "not-started", remote?.jobs?.isEmpty == true {
+        return "Stored in cloud"
+      }
+      return remote?.label ?? "Connecting…"
     }
     if upload.lastError != nil { return "Failed · Upload failed" }
     guard let size = upload.partSize, upload.totalBytes > 0 else { return "Uploading 0%" }

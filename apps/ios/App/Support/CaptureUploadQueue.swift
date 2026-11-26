@@ -89,6 +89,26 @@ import Upload
     for capture in captures { await enqueue(capture) }
   }
 
+  func refineInCloud(_ capture: LocalCapture) async throws {
+    let config = ServiceConfiguration(defaults: .standard)
+    guard let base = config.apiRoot else { throw UploadError.invalidURL }
+    let uploader: BundleUploader
+    if let existing = uploaders[capture.id] {
+      uploader = existing
+    } else {
+      uploader = try BundleUploader(
+        directory: capture.uploadDirectory, apiBase: base,
+        token: {
+          let token = APICredentials.token
+          guard !token.isEmpty else { throw APICredentials.CredentialError.unavailable }
+          return token
+        })
+      uploaders[capture.id] = uploader
+    }
+    try await uploader.refineInCloud()
+    states[capture.id] = await uploader.snapshot
+  }
+
   func reconnect(identifier: String, completion: @escaping @MainActor @Sendable () -> Void) async {
     let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
       .appendingPathComponent("Captures")
@@ -120,7 +140,7 @@ import Upload
 
   static func progress(_ state: UploadState?) -> Double {
     guard let state else { return 0 }
-    if state.jobID != nil { return 1 }
+    if state.uploadComplete { return 1 }
     guard let size = state.partSize, state.totalBytes > 0 else { return 0 }
     let bytes = state.completed.reduce(UInt64(0)) { sum, part in
       let offset = UInt64(max(0, part.partNumber - 1)) * size
