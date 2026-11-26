@@ -188,11 +188,12 @@
         try? dataset?.cleanup()
         row.totalSeconds = ProcessInfo.processInfo.systemUptime - started
         row.thermalAtEnd = ProcessInfo.processInfo.thermalState.rawValue
-        let footprints =
-          row.samples.compactMap(\.physicalFootprint)
-          + (currentReport?.thermalTimeline.dropFirst(timelineStart).compactMap(\.physicalFootprint)
-            ?? [])
-          + [row.peakPhysicalFootprint, ProcessMemory.physicalFootprint()].compactMap { $0 }
+        var footprints: [UInt64] = row.samples.compactMap(\.physicalFootprint)
+        if let timeline = currentReport?.thermalTimeline {
+          footprints.append(contentsOf: timeline.dropFirst(timelineStart).compactMap(\.physicalFootprint))
+        }
+        if let peak = row.peakPhysicalFootprint { footprints.append(peak) }
+        if let now = ProcessMemory.physicalFootprint() { footprints.append(now) }
         row.peakPhysicalFootprint = footprints.max()
         currentReport?.runs.append(row)
         if criticalObserved || ProcessInfo.processInfo.thermalState == .critical
