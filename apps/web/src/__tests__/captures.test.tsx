@@ -106,7 +106,7 @@ const captureFile: CaptureFile = {
   updatedAt: "2026-09-20T00:00:00Z",
 };
 
-it("a stored phone capture offers cloud refinement only after confirmation", async () => {
+it("a stored phone capture confirms the full quality cloud run", async () => {
   const capture: Capture = {
     id: "phone",
     name: "Phone scan",
@@ -152,6 +152,9 @@ it("a stored phone capture offers cloud refinement only after confirmation", asy
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Refine in cloud" }));
   expect(process).not.toHaveBeenCalled();
+  expect(confirm).toHaveBeenCalledWith(
+    "Refine in cloud? This starts the full-quality run using paid GPU processing.",
+  );
   confirm.mockReturnValue(true);
   await user.click(screen.getByRole("button", { name: "Refine in cloud" }));
   expect(process).toHaveBeenCalledWith("photo-reconstruct");

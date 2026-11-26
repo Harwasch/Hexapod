@@ -287,9 +287,13 @@ export function CaptureCard({
               onClick={() => {
                 if (
                   !storedPhone ||
-                  window.confirm("Refine in cloud? This starts paid GPU processing.")
-                )
+                  window.confirm(
+                    "Refine in cloud? This starts the full-quality run using paid GPU processing.",
+                  )
+                ) {
+                  // Refine sends only the recipe, keeping the best cloud quality defaults.
                   onProcess(recipe);
+                }
               }}
               loading={processing}
               leadingIcon={<Play size={13} aria-hidden="true" />}
