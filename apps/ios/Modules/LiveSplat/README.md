@@ -91,3 +91,22 @@ UI timer polls compact summaries and updates tips/ring without geometry readback
 references; `ingest(SplatFrame)` lazily allocates CPU hashes for offline fixtures
 only. `FakeLiveSplat` supplies deterministic isolated UI coverage. See
 [TESTING.md](TESTING.md) for commands and the evidence boundary.
+
+## Saved trained splats (Build B)
+
+`SavedSplat` reads the trainer's standard binary little-endian PLY, preserving
+world position, quaternion covariance and opacity. The portable reader, orbit
+math and far-to-near sorting have Linux tests. Saved display uses SH DC colour;
+sharing retains the original PLY with all coefficients. No live preview geometry
+is substituted for a trained result.
+
+`SavedSplatRenderer` uses the same RealityKit postprocess ownership pattern as
+`MetalPreview`: camera passthrough followed by premultiplied Gaussian quads into
+the existing command buffer. It also draws into the result viewer's MTKView.
+Camera matrices update from every live AR frame; CPU sorting runs one request
+at a time off MainActor. The App retains in-place eligibility through a pause
+of the same session and invalidates it on interruption, dismantling or world reset. This conservatively hides the action rather than
+pretending to relocalize a saved scan.
+
+See [Build B implementation and acceptance](../../BUILD_B_REPORT.md) for device
+validation, cloud handoff, storage, identifiers and compile self-audit.
