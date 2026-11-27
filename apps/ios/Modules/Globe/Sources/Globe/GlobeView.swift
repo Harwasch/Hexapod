@@ -102,11 +102,9 @@
                 }.accessibilityIdentifier("globe.sitePicker")
               }
               if !snapshot.property.epochs.isEmpty {
-                Picker("Scan", selection: $selectedScan) {
+                Section("Scan") {
                   ForEach(snapshot.property.epochs) { scan in
-                    Text(globeScanDate(scan.observedAt)).tag(Optional(scan.captureId ?? scan.id))
-                      .accessibilityIdentifier(
-                        "globe.scan.\((scan.captureId ?? scan.id).uuidString.lowercased())")
+                    scanMenuButton(scan)
                   }
                 }
               }
@@ -121,6 +119,7 @@
                 .padding(.horizontal, 14).frame(minHeight: 44)
                 .background(.regularMaterial, in: Capsule())
             }.accessibilityIdentifier("globe.scanPicker")
+              .accessibilityValue(selectedScan?.uuidString.lowercased() ?? "")
               .padding(.trailing, 16).padding(.top, 8)
           }
         } else if effectiveRoute == nil && loadedSites {
@@ -191,6 +190,17 @@
         }
         .presentationDetents([.medium])
       }
+    }
+
+    private func scanMenuButton(_ scan: GlobeScan) -> some View {
+      let scanID = scan.captureId ?? scan.id
+      return Button { selectedScan = scanID } label: {
+        if selectedScan == scanID {
+          Label(globeScanDate(scan.observedAt), systemImage: "checkmark")
+        } else {
+          Text(globeScanDate(scan.observedAt))
+        }
+      }.accessibilityIdentifier("globe.scan.\(scanID.uuidString.lowercased())")
     }
 
     private func openScan(_ scanID: UUID?, siteID: UUID) {

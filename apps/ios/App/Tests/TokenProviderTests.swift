@@ -20,3 +20,33 @@ struct TokenProviderTests {
     }
   }
 }
+
+#if DEBUG
+  struct UITestTokenStoreTests {
+    @Test func ordinaryLaunchKeepsKeychainStorage() {
+      #expect(APICredentials.makeUITestTokenStore(mode: LaunchMode(arguments: [])) == nil)
+    }
+
+    @Test func fixtureCredentialsAreTrimmedSharedAndRemovable() throws {
+      for fixture in ["yard-small", "production-providers"] {
+        let mode = LaunchMode(arguments: ["Hex", "-uiTestFixture", fixture])
+        let store = try #require(APICredentials.makeUITestTokenStore(mode: mode))
+        #expect(store.writeToken.isEmpty)
+        store.setWriteToken("  fixture-token\n")
+        let backgroundReader = store
+        #expect(backgroundReader.writeToken == "fixture-token")
+        store.setWriteToken(" \n")
+        #expect(backgroundReader.writeToken.isEmpty)
+      }
+    }
+
+    @Test func fixtureCredentialsDoNotSurviveAnotherLaunch() throws {
+      let mode = LaunchMode(arguments: ["Hex", "-uiTestFixture", "yard-small"])
+      let store = try #require(APICredentials.makeUITestTokenStore(mode: mode))
+      store.setWriteToken("fixture-token")
+      let relaunched = try #require(APICredentials.makeUITestTokenStore(mode: mode))
+      #expect(relaunched.writeToken.isEmpty)
+      #expect(store.writeToken == "fixture-token")
+    }
+  }
+#endif

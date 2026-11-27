@@ -158,7 +158,13 @@ import XCTest
     XCTAssertEqual(app.navigationBars.count, 0)
     XCTAssertEqual(app.buttons.matching(identifier: "globe.back").count, 1)
     tap("globe.scanPicker", shot: "Scan picker")
+    let secondScan = app.buttons["globe.scan.00000000-0000-0000-0000-000000000004"]
+    if !secondScan.waitForExistence(timeout: 10) {
+      tap("globe.scanPicker", shot: "Scan picker retry")
+    }
     tap("globe.scan.00000000-0000-0000-0000-000000000004", shot: "Selected second scan")
+    XCTAssertEqual(app.buttons["globe.scanPicker"].value as? String,
+      "00000000-0000-0000-0000-000000000004")
     XCTAssertTrue(app.buttons["globe.scanPicker"].label.contains("Simulated property"))
     XCTAssertFalse(app.buttons["globe.scanPicker"].label.contains("2026-01-02"))
     screenshot("Second scan on globe")
@@ -198,6 +204,9 @@ import XCTest
     tap("settings.signIn", shot: "Signed in")
     XCTAssertEqual(app.buttons["settings.signIn"].label, "Saved")
     tap("settings.signOut", shot: "Credential removed")
+    XCTAssertEqual(app.buttons["settings.signIn"].label, "Sign in")
+    XCTAssertFalse(app.buttons["settings.signIn"].isEnabled)
+    XCTAssertFalse(app.buttons["settings.signOut"].exists)
   }
 
   func testProductionProviderSelectionWithQuietRendering() {

@@ -324,6 +324,8 @@
       }
       if remote != nil || refining || cloudRunning {
         Label(cloudLabel, systemImage: "icloud.and.arrow.up").font(.caption)
+          .accessibilityElement(children: .ignore)
+          .accessibilityLabel(cloudLabel)
           .accessibilityIdentifier(TrainingID.refineProgress)
       }
     }

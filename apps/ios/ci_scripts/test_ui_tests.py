@@ -98,6 +98,36 @@ class UITestWorkflowTests(unittest.TestCase):
                     self.assertIsNotNone(re.search(pattern, source),
                                          f'{filename}: {identifier} needs its own container')
 
+    def test_ui_fixture_keeps_uikit_menu_animations_available(self):
+        source = (ROOT / 'apps/ios/App/HexApp.swift').read_text()
+        # Disabling UIKit animations globally prevents the globe's context menu
+        # from presenting. SwiftUI's transaction already quiets fixture views.
+        self.assertNotIn('UIView.setAnimationsEnabled(false)', source)
+        self.assertIn('transaction.disablesAnimations = true', source)
+
+    def test_scan_menu_identifiers_belong_to_buttons(self):
+        source = (ROOT / 'apps/ios/Modules/Globe/Sources/Globe/GlobeView.swift').read_text()
+        # Picker option Text identifiers do not reliably reach native menu actions.
+        self.assertNotIn('Picker("Scan"', source)
+        self.assertIn('Section("Scan")', source)
+        self.assertIn('scanMenuButton(scan)', source)
+        button = source.split('private func scanMenuButton', 1)[1]
+        button = button.split('private func openScan', 1)[0]
+        self.assertIn('let scanID = scan.captureId ?? scan.id', button)
+        self.assertIn('Button { selectedScan = scanID } label:', button)
+        self.assertIn('if selectedScan == scanID', button)
+        self.assertIn('Label(globeScanDate(scan.observedAt), systemImage: "checkmark")', button)
+        self.assertIn('Text(globeScanDate(scan.observedAt))', button)
+        self.assertIn('}.accessibilityIdentifier("globe.scan.', button)
+
+    def test_training_status_has_one_explicit_accessible_label(self):
+        source = (ROOT / 'apps/ios/App/TrainingScreen.swift').read_text()
+        status = source.split('Label(cloudLabel, systemImage:', 1)[1]
+        status = status.split('.accessibilityIdentifier(TrainingID.refineProgress)', 1)[0]
+        # Label's image must not also match refine.progress as the first element.
+        self.assertIn('.accessibilityElement(children: .ignore)', status)
+        self.assertIn('.accessibilityLabel(cloudLabel)', status)
+
     def test_fixture_preview_task_has_content_before_image_loads(self):
         source = (ROOT / 'apps/ios/App/CameraScreen.swift').read_text()
         preview = source.split('@ViewBuilder private var cameraSurface:', 1)[1]
