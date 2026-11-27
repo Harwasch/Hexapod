@@ -44,19 +44,22 @@
     }
 
     func loadExisting() async {
+      guard experience.stage == .choosing else { return }
       let capture = capture
-      guard let record = await Task.detached(operation: { capture.phoneSplat }).value else { return }
+      guard let record = await Task.detached(operation: { capture.phoneSplat }).value, experience.stage == .choosing else { return }
       do {
         simulated = simulated || record.simulated == true
         if let url = record.previewURL(for: capture) {
           let data = try await Task.detached { try Data(contentsOf: url) }.value
+          guard experience.stage == .choosing else { return }
           previewPNG = data
           previewImage = UIImage(data: data)
         }
-        try await loadResult(record.url(for: capture), bitmapOnly: previewImage != nil || LaunchMode.current.isUITest)
+        try await loadResult(record.url(for: capture), bitmapOnly: previewImage != nil || LaunchMode.current.isUITest, onlyWhileChoosing: true)
+        guard experience.stage == .choosing else { return }
         sharpness = record.sharpness
         experience.showResult()
-      } catch { experience.fail() }
+      } catch { if experience.stage == .choosing { experience.fail() } }
     }
     func start() {
       guard operation == nil else { return }
@@ -192,10 +195,11 @@
     private func waitForForeground() async throws {
       while !active && !stopRequested { try await Task.sleep(for: .milliseconds(100)) }
     }
-    private func loadResult(_ url: URL, bitmapOnly: Bool) async throws {
-      shareURL = url
+    private func loadResult(_ url: URL, bitmapOnly: Bool, onlyWhileChoosing: Bool = false) async throws {
+      if onlyWhileChoosing && experience.stage != .choosing { return }
       if bitmapOnly {
         guard previewImage != nil else { throw PrepError.invalid("Preview missing") }
+        shareURL = url
         surface = nil
         scene = nil
         renderer = nil
