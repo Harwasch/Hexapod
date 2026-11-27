@@ -10,16 +10,16 @@ Captures have durable phone/cloud badges and share actions.
 
 | Behaviour                                          | Source, relative to `apps/ios`                                                         |
 | -------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| Product flow and icon controls                     | `App/TrainingScreen.swift:10`, presets at `:168`, results at `:252`                    |
-| Training lifetime and result loading               | `App/TrainingModel.swift:11`, finalization at `:147`, camera updates at `:256`         |
+| Product flow and icon controls                     | `App/TrainingScreen.swift:10` (presets and result controls)                            |
+| Training lifetime and result loading               | `App/TrainingModel.swift:11` (lifetime, finalization and camera updates)               |
 | Metal snapshot display                             | `App/TrainingMetalView.swift:7`                                                        |
 | Serialized native previews and held-out evaluation | `Modules/PhoneTrain/Sources/PhoneTrain/PhoneTrainer.swift:34`, boundary work at `:296` |
 | Presets, snapshot cadence and active-step ETA      | `Modules/PhoneTrain/Sources/PhoneTrain/TrainingPolicy.swift:17`, `:96`, `:109`         |
 | UI state, Sharpness and durable result records     | `App/Support/TrainingExperience.swift:4`, `:50`, `:69`, `:115`                         |
 | Confirmed cloud request survives upload/relaunch   | `App/Support/CaptureUploadQueue.swift:109`                                             |
 | Cloud tileset readiness and bridge                 | `App/TrainingCloudPreview.swift:12`, `:75`, `:104`                                     |
-| PLY decoding, sorting and orbit math               | `Modules/LiveSplat/Sources/LiveSplat/SavedSplat.swift:12`, `:94`, `:112`               |
-| World-pose compositing                             | `Modules/LiveSplat/Sources/LiveSplat/SavedSplatRenderer.swift:12`, `:75`, `:104`       |
+| PLY decoding, sorting and orbit math               | `Modules/LiveSplat/Sources/LiveSplat/SavedSplat.swift:12`, `SplatSortPolicy.swift`     |
+| World-pose compositing                             | `Modules/LiveSplat/Sources/LiveSplat/SavedSplatRenderer.swift:12`                      |
 
 Phone results are committed atomically under `Application Support/PhoneResults/<id>`.
 The immutable capture bundle is untouched. LocalCaptures exposes the result;
@@ -58,7 +58,7 @@ bridge in a screen-owned WKWebView. It selects the exact native capture route.
 The catalog's Ready state starts loading; the embed's `data-scan-state=ready`
 signal starts the crossfade. The native phone view remains mounted for fallback.
 This is a crossfade between independent cameras, not a registered geometric morph.
-Subsequent catalog polls do not override an explicit Phone selection. A failed
+Catalog polling stops at Ready and does not override an explicit Phone selection. A failed
 cloud view returns to Phone and offers retry. Memory warnings reach the existing
 cloud renderer's memory-tier policy.
 
@@ -143,10 +143,10 @@ Observation expansion is excluded on Linux.
 | `App/CameraActions.swift`                                          | MainActor ARView access, current camera projection, Sendable renderer callback and explicit session/world identity lifetime.                                                                                             |
 | `App/CameraScreen.swift`                                           | Overlay keeps ARView mounted; explicit registry injection; post-scan hero identifier.                                                                                                                                    |
 | `App/DebugMenu.swift`                                              | Existing CameraScreen initializer receives an internal registry; no cross-module private symbols.                                                                                                                        |
-| `App/HomeScreen.swift`                                             | Small badge view, explicit hero label, URL ShareLinks, result cleanup and cost-confirm IDs. Existing raw backend error text removed.                                                                                     |
+| `App/HomeScreen.swift`                                             | Small badge view, explicit hero label, URL ShareLinks, result cleanup and cost-confirm IDs. Capture-detail backend error text and video sharing retain their original contracts.                                         |
 | `App/TrainingModel.swift`                                          | UI MainActor; prep/training actors awaited; detached decoding/sorting pass Sendable values; cancellation awaits training before cleanup; thermal finalization returns to cooling.                                        |
 | `App/TrainingMetalView.swift`                                      | Synchronous Metal setup in a synchronous helper; MainActor delegate; one display command in flight; completed surfaces retained through GPU completion.                                                                  |
-| `App/TrainingScreen.swift`                                         | Small typed helper views; no arithmetic map/stride builders, optional-map interpolation, implicit-colour ternaries or duplicate declarations; lifecycle forwards to trainer.                                             |
+| `App/TrainingScreen.swift`                                         | Small typed helper views; no arithmetic map/stride builders, optional-map interpolation, implicit-colour ternaries or duplicate declarations; lifecycle forwards to the shared session protocol.                         |
 | `App/TrainingCloudPreview.swift`                                   | MainActor WebKit delegates; completion-form JavaScript calls; JSON arguments; weak message proxy; same-origin checks; no Any values cross actors.                                                                        |
 | `Modules/PhoneTrain/Sources/PhoneTrain/PhoneTrainer.swift`         | Every session call awaits its runtime actor, including throwing iteration getters; preview completion precedes the next step; auxiliary ownership serializes checkpoints/evaluation/export.                              |
 | `Modules/LiveSplat/Sources/LiveSplat/SavedSplatRenderer.swift`     | Immutable GPU geometry/pipelines, locked uniforms/order/live camera matrices; synchronous Metal factories; AR command buffer owns compositing. Narrow unchecked Sendable boundary matches the existing renderer pattern. |
@@ -360,3 +360,128 @@ File list, relative to `apps/ios`:
 
 The follow-up remains uncommitted. No Mac CI dispatch, push, merge or deployment
 was performed. Final full-gate tails are in the delivery message.
+
+## Follow-up 2: PR #159 review fixes
+
+All nine numbered findings and all three renderer suspicions are addressed. This
+section supersedes earlier implementation details where they overlap. Changes
+remain uncommitted; no Apple CI, simulator or real-device execution was requested.
+The dependency on #138 remains unchanged. All 30 Build B identifier constants are
+unchanged. Capture detail again uses its original `capture.refine` identifier.
+
+1. In-place projection and renderer viewport use `arView.bounds.size`, including
+   safe areas, both on attachment and on camera updates. `offer()` reads that same
+   viewport. There is no standalone portable projection function: ARKit constructs
+   the projection directly. Phone verification must compare alignment at screen edges.
+2. The portable `TrainingOutputPolicy` permits deletion only after the session is
+   closed and the result is saved or training is terminal. `TrainingModel` then
+   deletes only `PhoneResults/<id>/Training`, including PLY/checkpoints. Cancel and
+   failure use the same release path; cooling/paused owners retain their scratch
+   files for resume. The immutable capture bundle is never a deletion target.
+3. `TrainingCameraPolicy` drives perception enablement independently of scan phase.
+   Busy training disables the driver, display work, tap admission and frame-feed
+   consumers, so the 10 Hz tick cannot re-enable Vision. Already-running inference
+   drains through the driver's existing disabled-generation handling. AR tracking
+   stays alive only when the original capture world is still eligible for in-place
+   viewing; otherwise the coordinator pauses it. Completion/dismissal restores the
+   ordinary camera policy. Origin invalidation also removes the keep-alive reason.
+4. Saved-result loading checks `.choosing` before and after every suspension that
+   precedes a UI mutation. A slow PLY read cannot replace a newer training state;
+   its errors also cannot change that newer state to failure.
+5. Portable cloud decisions skip busy training and stop at Ready or catalog failure.
+   Stage changes restart the task without fetching terminal state again. A Ready
+   route can still mount when the result appears. Explicit refinement clears old
+   terminal state. `saveIfChanged` compares both IDs before writing `cloud.json`,
+   including list/detail catalog reads.
+6. Capture detail once again displays the original full server/upload error and
+   shares the capture video. Result-viewer and badge PLY actions remain. The detail
+   Refine button retains `capture.refine`, matching `TESTING.md`.
+7. Both capture-row queries search all descendants using the unchanged prefix,
+   preserving discoverable contained badge elements.
+8. The tap helper waits for existence, hittability and enabled state with an
+   `XCTNSPredicateExpectation`; timeout fails without tapping. No sleeps were added.
+9. `test_ui_tests.py` has a direct-execution `unittest.main()` entry point.
+
+Renderer suspicions:
+
+- A portable three-degree direction threshold gates CPU sorts against the last
+  successfully uploaded order. Translation alone does not affect depth ordering.
+  Uniforms still update every tick. Three index buffers are allocated once; locked
+  reader counts and command-completion handlers prevent overwriting in-flight GPU
+  data. An unavailable slot defers publication and retries instead of allocating.
+- After GPU upload the model retains 16-byte positions for sorting, center and
+  radius, rather than the full 80-byte Gaussian attributes. The temporary decoded
+  scene is released; GPU attributes remain in one buffer. CPU positions are still
+  required for CPU sorting.
+- Release cancels the preview observer and clears the last Metal surface before
+  closing the session, including error/cancel paths. The observer checks task
+  cancellation before publishing. An already submitted display blit deliberately
+  retains its surface only until its command finishes.
+
+### Review-fix compile self-audit and Apple-only list
+
+Every changed Apple-only line was re-read against COMPILE SAFETY. The complete
+Apple-only changed file list for this follow-up is:
+
+- `App/ARCameraView.swift`: MainActor coordinator activity; lock-protected frame
+  admission flag; no frame crosses an actor boundary.
+- `App/CameraActions.swift`: MainActor ARView bounds and named value tuple; policy
+  helpers are internal portable symbols; every driver enable path respects busy
+  training; no new ARSession reset or configuration overload.
+- `App/TrainingModel.swift`: stage guards after detached reads; native lifecycle
+  awaits; scratch deletion occurs after close; detached closures capture Sendable
+  URLs/compact geometry; saved renderer identity checked after sorting; no retained
+  native surface after release. Typed local viewport and direction values.
+- `App/TrainingScreen.swift`: small policy-driven tasks and helper methods; no heavy
+  ViewBuilder arithmetic; cancellation/stage checks before catalog publication;
+  explicit MainActor camera restore after stop; unchanged product identifiers.
+- `App/HomeScreen.swift`: restored URL ShareLink and optional error binding; existing
+  `.textSelection(.enabled)`; catalog writes use the portable idempotent helper.
+- `Modules/LiveSplat/Sources/LiveSplat/SavedSplatRenderer.swift`: local slot array
+  initialized before assigning stored properties; synchronous Metal allocations;
+  immutable buffers and lock-protected reader counts/uniforms; command completion
+  owns each read until GPU completion; no asynchronous Metal overload introduced.
+- `UITests/HexUITests.swift`: MainActor XCTest queries; predicate waiter replaces
+  immediate tap; timeout exits safely; descendant query retains the same prefix.
+
+An iOS-target frontend syntax parse covers these seven files. It does not perform
+Apple SDK type checking or Metal execution. New policy/source files and tests are
+portable. No new msplat APIs are used, and the existing source inventory remains
+applicable (`CameraPose` and MetalPreviewSurface declarations rechecked read-only).
+No numeric tolerances were changed. Three degrees is a new documented display
+cadence policy, tested away from its boundary rather than calibrated to this host.
+
+Portable tests were written before implementation. The App and LiveSplat test
+builds first failed on the missing policies/types; an additional catalog `error`
+case then failed behaviorally before the terminal-state policy was corrected.
+Coverage includes scratch eligibility, camera re-enablement, terminal/ busy cloud
+polling, idempotent manifest writes, translation-independent sorting and compact
+geometry parity. Final full gate tails are provided in the delivery message.
+
+### Per-fix commit plan
+
+Paths are relative to `apps/ios`. Shared integration files require staging the
+corresponding hunks: viewport, cleanup, load-race and sorting changes share
+`TrainingModel`; camera and polling changes share `TrainingScreen`; fixes 7 and 8
+share the UI-test file. The report can be staged by section alongside each fix.
+
+| Fix                 | Commit subject                                                  | Exact file list (excluding this shared report)                                                                                                                                                                                                                                      |
+| ------------------- | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1                   | Match in-place projection to the full AR viewport               | `App/CameraActions.swift`, `App/TrainingModel.swift`, `Modules/LiveSplat/Sources/LiveSplat/SavedSplatRenderer.swift`                                                                                                                                                                |
+| 2                   | Remove closed training scratch files after save or termination  | `App/Support/TrainingOutputPolicy.swift`, `App/Tests/TrainingOutputPolicyTests.swift`, `App/TrainingModel.swift`                                                                                                                                                                    |
+| 3                   | Suspend camera inference while phone training is busy           | `App/Support/TrainingCameraPolicy.swift`, `App/Tests/TrainingCameraPolicyTests.swift`, `App/CameraActions.swift`, `App/ARCameraView.swift`, `App/TrainingScreen.swift`                                                                                                              |
+| 4                   | Keep slow saved-result reads from replacing active training     | `App/TrainingModel.swift`                                                                                                                                                                                                                                                           |
+| 5                   | Stop terminal cloud polling and avoid unchanged manifest writes | `App/Support/TrainingCloudPolicy.swift`, `App/Tests/TrainingCloudPolicyTests.swift`, `App/Support/TrainingExperience.swift`, `App/TrainingScreen.swift`, `App/HomeScreen.swift`                                                                                                     |
+| 6                   | Preserve capture-detail sharing errors and refinement identity  | `App/HomeScreen.swift`                                                                                                                                                                                                                                                              |
+| 7                   | Find contained capture rows through descendant queries          | `UITests/HexUITests.swift`                                                                                                                                                                                                                                                          |
+| 8                   | Wait for enabled controls before UI-test taps                   | `UITests/HexUITests.swift`                                                                                                                                                                                                                                                          |
+| 9                   | Run UI workflow tests when invoked directly                     | `ci_scripts/test_ui_tests.py`                                                                                                                                                                                                                                                       |
+| Sorting and buffers | Reuse GPU sort buffers and sort only after direction changes    | `Modules/LiveSplat/Sources/LiveSplat/SplatSortPolicy.swift`, `Modules/LiveSplat/Tests/LiveSplatTests/SplatSortPolicyTests.swift`, `Modules/LiveSplat/Sources/LiveSplat/SavedSplat.swift`, `Modules/LiveSplat/Sources/LiveSplat/SavedSplatRenderer.swift`, `App/TrainingModel.swift` |
+| CPU geometry        | Retain only positions after uploading saved Gaussian attributes | `Modules/LiveSplat/Sources/LiveSplat/SplatSortPolicy.swift`, `Modules/LiveSplat/Tests/LiveSplatTests/SplatSortPolicyTests.swift`, `Modules/LiveSplat/Sources/LiveSplat/SavedSplat.swift`, `App/TrainingModel.swift`                                                                 |
+| Surface lifetime    | Release the final native preview when training closes           | `App/TrainingModel.swift`                                                                                                                                                                                                                                                           |
+
+The CPU geometry and sort-buffer changes share one portable source/test file and
+can also be committed together. The surface-lifetime change shares the session
+release helper with fix 2. Real-phone acceptance still includes safe-area AR
+alignment, thermal/cooling resume, actual disk cleanup, sustained memory/GPU
+behavior and the cloud crossfade. UI tests 7/8 need an Apple simulator run.
