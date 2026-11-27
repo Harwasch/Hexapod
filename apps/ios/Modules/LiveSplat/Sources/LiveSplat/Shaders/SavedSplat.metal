@@ -3,7 +3,7 @@ using namespace metal;
 struct SavedGaussian { float4 position, color, axisX, axisY, axisZ; };
 struct SavedUniforms { float4x4 view, projection; float4 viewport; };
 struct SavedVertex { float4 position [[position]]; float2 local; float4 color; };
-vertex SavedVertex savedSplatVertex(uint vertex [[vertex_id]], uint instance [[instance_id]],
+vertex SavedVertex savedSplatVertex(uint vid [[vertex_id]], uint instance [[instance_id]],
     device const SavedGaussian* splats [[buffer(0)]], device const uint* order [[buffer(1)]],
     constant SavedUniforms& u [[buffer(2)]]) {
     SavedGaussian g = splats[order[instance]];
@@ -12,7 +12,7 @@ vertex SavedVertex savedSplatVertex(uint vertex [[vertex_id]], uint instance [[i
     SavedVertex out;
     out.color = g.color;
     float2 corners[6] = {float2(-1,-1),float2(1,-1),float2(-1,1),float2(-1,1),float2(1,-1),float2(1,1)};
-    out.local = corners[vertex] * 3.0;
+    out.local = corners[vid] * 3.0;
     if (p.z >= -0.03 || clip.w <= 0) { out.position = float4(2,2,2,1); out.color = 0; return out; }
     float2 center = clip.xy / clip.w;
     float2 axes[3];
