@@ -41,10 +41,7 @@
           let dimensions = Self.dimensions(frame, maxSide: config.blurMaxSide)
           let rgb = try Self.raster(
             image, context: context, width: dimensions.0, height: dimensions.1)
-          let luma = stride(from: 0, to: rgb.count, by: 3).map {
-            (0.2126 * Double(rgb[$0]) + 0.7152 * Double(rgb[$0 + 1]) + 0.0722 * Double(rgb[$0 + 2]))
-              / 255
-          }
+          let luma = Keyframes.luma(rgb: rgb)
           scores[frame.index] = try Keyframes.blurScore(
             luma: luma, width: dimensions.0, height: dimensions.1)
         }
@@ -93,9 +90,17 @@
         guard !points.isEmpty else {
           throw PrepError.invalid("No confident depth seeds in training views")
         }
-        let sparse = try DatasetSparsePointSet(
-          xyz: points.flatMap { [Float($0.x), Float($0.y), Float($0.z)] },
-          rgb: points.flatMap(\.rgb))
+        var xyz = [Float]()
+        var colours = [UInt8]()
+        xyz.reserveCapacity(points.count * 3)
+        colours.reserveCapacity(points.count * 3)
+        for point in points {
+          xyz.append(Float(point.x))
+          xyz.append(Float(point.y))
+          xyz.append(Float(point.z))
+          colours.append(contentsOf: point.rgb)
+        }
+        let sparse = try DatasetSparsePointSet(xyz: xyz, rgb: colours)
         let descriptor = try DatasetDescriptor(frames: datasetFrames, points: sparse)
         return PreparedDataset(
           descriptor: descriptor, frames: selected, cacheDirectory: cache,
@@ -197,9 +202,17 @@
         return true
       }
       guard rendered else { throw PrepError.invalid("RGB raster allocation") }
-      return stride(from: 0, to: rgba.count, by: 4).flatMap {
-        [rgba[$0], rgba[$0 + 1], rgba[$0 + 2]]
+      // A plain loop: the stride/flatMap form timed out Xcode's type checker.
+      var rgb = [UInt8]()
+      rgb.reserveCapacity(rgba.count / 4 * 3)
+      var index = 0
+      while index + 2 < rgba.count {
+        rgb.append(rgba[index])
+        rgb.append(rgba[index + 1])
+        rgb.append(rgba[index + 2])
+        index += 4
       }
+      return rgb
     }
 
     private static func jpeg(rgb: [UInt8], width: Int, height: Int, quality: Double, to url: URL)

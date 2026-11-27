@@ -245,19 +245,25 @@
             throw PrepError.invalid("No completed step")
           }
           let memory = try await session.memoryMetrics()
-          let elapsed = ProcessInfo.processInfo.systemUptime - start
+          // Each argument is computed with an explicit type first: a single initializer
+          // full of mixed-type arithmetic is what times out Xcode's type checker.
+          let now: Double = ProcessInfo.processInfo.systemUptime
+          let elapsed: Double = now - start
+          let stepsDone: Int = max(1, submitted.iteration - initialStep)
+          let stepsLeft: Int = Int(config.iterations) - submitted.iteration
+          let secondsPerStep: Double = elapsed / Double(stepsDone)
+          let eta: Double = secondsPerStep * Double(stepsLeft)
+          var loss: Float? = nil
+          if let value = completed.loss, value.isFinite { loss = value }
+          var footprint: UInt64? = ProcessMemory.physicalFootprint()
+          if footprint == nil { footprint = memory.processPhysicalFootprintBytes }
+          let availableNow: UInt64 = UInt64(os_proc_available_memory())
+          let thermalNow: Int = ProcessInfo.processInfo.thermalState.rawValue
           let sample = TrainSample(
-            step: submitted.iteration,
-            wallSeconds: ProcessInfo.processInfo.systemUptime - stepStart, elapsedSeconds: elapsed,
+            step: submitted.iteration, wallSeconds: now - stepStart, elapsedSeconds: elapsed,
             completedMilliseconds: completed.endToEndMs, gpuMilliseconds: completed.gpuExecutionMs,
-            loss: completed.loss.flatMap { $0.isFinite ? $0 : nil }, psnr: lastPSNR,
-            splatCount: completed.splatCount,
-            etaSeconds: elapsed / Double(max(1, submitted.iteration - initialStep))
-              * Double(Int(config.iterations) - submitted.iteration),
-            physicalFootprint: ProcessMemory.physicalFootprint()
-              ?? memory.processPhysicalFootprintBytes,
-            availableMemory: UInt64(os_proc_available_memory()),
-            thermalState: ProcessInfo.processInfo.thermalState.rawValue)
+            loss: loss, psnr: lastPSNR, splatCount: completed.splatCount, etaSeconds: eta,
+            physicalFootprint: footprint, availableMemory: availableNow, thermalState: thermalNow)
           samples.append(sample)
           emit("Training", sample: sample)
         }

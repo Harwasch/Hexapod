@@ -39,7 +39,10 @@ public struct BenchmarkRun: Codable, Sendable {
   public var voxelSize: Double?
   public var samples: [TrainSample] = []
   public var worstThermal: Int {
-    ([thermalAtStart, thermalAtEnd].compactMap { $0 } + samples.map(\.thermalState)).max() ?? 0
+    var states: [Int] = samples.map(\.thermalState)
+    if let start = thermalAtStart { states.append(start) }
+    if let end = thermalAtEnd { states.append(end) }
+    return states.max() ?? 0
   }
 }
 

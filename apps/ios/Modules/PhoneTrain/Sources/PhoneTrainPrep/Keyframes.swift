@@ -8,6 +8,25 @@ public struct PreparedFrame: Codable, Sendable {
 }
 
 public enum Keyframes {
+  /// Rec. 709 luma in [0,1] from packed 8-bit RGB. A plain loop with typed terms: the
+  /// closure form timed out Xcode's type checker.
+  public static func luma(rgb: [UInt8]) -> [Double] {
+    let red: Double = 0.2126 / 255
+    let green: Double = 0.7152 / 255
+    let blue: Double = 0.0722 / 255
+    var result = [Double]()
+    result.reserveCapacity(rgb.count / 3)
+    var index = 0
+    while index + 2 < rgb.count {
+      let r: Double = Double(rgb[index]) * red
+      let g: Double = Double(rgb[index + 1]) * green
+      let b: Double = Double(rgb[index + 2]) * blue
+      result.append(r + g + b)
+      index += 3
+    }
+    return result
+  }
+
   /// Variance of the four-neighbour Laplacian. Input is downscaled luma [0,1].
   public static func blurScore(luma: [Double], width: Int, height: Int) throws -> Double {
     guard width >= 3, height >= 3, luma.count == width * height,

@@ -26,6 +26,15 @@ final class PrepTests: XCTestCase {
       CaptureFrame.self, from: JSONSerialization.data(withJSONObject: object))
   }
 
+  func testLumaIsRec709AndIgnoresTrailingBytes() {
+    let luma = Keyframes.luma(rgb: [255, 255, 255, 255, 0, 0, 0, 0, 0, 7])
+    XCTAssertEqual(luma.count, 3)
+    XCTAssertEqual(luma[0], 1, accuracy: 1e-12)
+    XCTAssertEqual(luma[1], 0.2126, accuracy: 1e-12)
+    XCTAssertEqual(luma[2], 0)
+    XCTAssertTrue(Keyframes.luma(rgb: []).isEmpty)
+  }
+
   func testSavedBundleLogValidation() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
