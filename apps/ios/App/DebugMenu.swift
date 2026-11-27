@@ -28,7 +28,7 @@ import Voice
   var body: some View {
     Group {
       if let model {
-        CameraScreen(model: model, onCaptures: { showCaptures = true },
+        CameraScreen(model: model, registry: registry, onCaptures: { showCaptures = true },
           onSettings: { showSettings = true }, onGlobe: { showGlobe = true }).id(revision)
       } else {
         VStack(spacing: 20) {

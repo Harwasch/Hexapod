@@ -227,3 +227,10 @@ Verify XcodeGen package unification, binary linking and metallib packaging in th
 Apple build. Linux tests compile the pure prep/policy/report code, not these five
 Apple-only files. API source-file/line references, preset assumptions and the
 complete phone acceptance list are in [PhoneTrain](Modules/PhoneTrain/README.md).
+
+## Build B
+
+See [Build B compile self-audit](BUILD_B_REPORT.md#compile-self-audit) for the
+complete Apple-only source inventory and SDK ownership checks. The final local
+gates cover PhoneTrain, LiveSplat, Upload, App support, CI scripts and formatting.
+Apple compilation and physical-device acceptance remain required.

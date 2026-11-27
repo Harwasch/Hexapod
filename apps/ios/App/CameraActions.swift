@@ -10,6 +10,7 @@ import RealityKit
 import Router
 import UIKit
 import Voice
+import simd
 
 @MainActor protocol RecordingControl: AnyObject {
   var isRecording: Bool { get }
@@ -104,6 +105,26 @@ import Voice
     card = presentation.entities[index]
   }
   private weak var arView: ARView?
+  private var splatWorld = SplatWorldOrigin()
+  func invalidateSplatOrigin() { splatWorld.invalidate() }
+  func canPlaceSplat(capture: URL) -> Bool {
+    guard usesLiveCapture, cameraReady, let view = arView, view.session.currentFrame != nil else { return false }
+    return splatWorld.permits(capture: capture, session: ObjectIdentifier(view.session))
+  }
+  func trainedSplatCamera(size: CGSize, capture: URL) -> (simd_float4x4, simd_float4x4)? {
+    guard canPlaceSplat(capture: capture), let view = arView,
+      let frame = view.session.currentFrame else { return nil }
+    let orientation = view.window?.windowScene?.interfaceOrientation ?? .portrait
+    return (frame.camera.viewMatrix(for: orientation),
+      frame.camera.projectionMatrix(for: orientation, viewportSize: size, zNear: 0.02, zFar: 100))
+  }
+  func showTrainedSplat(_ renderer: SavedSplatRenderer?) {
+    frameFeed.setTrainedPreview(renderer)
+    guard let view = arView else { return }
+    if let renderer {
+      view.renderCallbacks.postProcess = { @Sendable context in renderer.composite(context) }
+    } else { view.renderCallbacks.postProcess = nil }
+  }
   private var voiceTask: Task<Void, Never>?
   private var answerTask: Task<Void, Never>?
   private var questionGeneration = UUID()
@@ -172,6 +193,9 @@ import Voice
         (overlay as? RealityAnswerOverlay)?.setScanning(false)
       case .saved(let directory):
         savedCapture = directory
+        if usesLiveCapture, cameraReady, let view = arView {
+          splatWorld.record(capture: directory, session: ObjectIdentifier(view.session))
+        } else { splatWorld.invalidate() }
         latestCapture = directory
       case .failed:
         failureText = "Scan failed"
@@ -651,6 +675,7 @@ import Voice
   func suspend() {
     previewTask?.cancel()
     previewTask = nil
+    frameFeed.setTrainedPreview(nil)
     perceptionDriver?.resetSelection(enabled: false)
     frameFeed.setPerceptionDriver(nil)
     let stoppedDriver = perceptionDriver

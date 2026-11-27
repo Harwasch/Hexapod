@@ -14,6 +14,8 @@ import Upload
 @MainActor final class CaptureUploadQueue {
   static let shared = CaptureUploadQueue()
   private var uploaders: [String: BundleUploader] = [:]
+  private var refinementTasks: [String: Task<Void, Never>] = [:]
+  private(set) var pendingRefinements: Set<String> = []
   private var starting: Set<String> = []
   private(set) var states: [String: UploadState] = [:]
   private(set) var issues: [String: String] = [:]
@@ -92,7 +94,43 @@ import Upload
   func resumeQueued() async {
     let root = LaunchMode.current.captureRoot
     let captures = (try? await Task.detached { try LocalCapture.list(at: root) }.value) ?? []
-    for capture in captures { await enqueue(capture) }
+    for capture in captures {
+      await enqueue(capture)
+      if CloudRefineIntent.pending(for: capture) { monitorRefinement(capture) }
+    }
+  }
+
+  /// Called only after the product's cost confirmation. Upload completion may be
+  /// delivered by URLSession after this screen closes; the intent survives relaunch.
+  func requestRefinement(_ capture: LocalCapture) async throws {
+    guard !APICredentials.token.isEmpty else { throw APICredentials.CredentialError.unavailable }
+    try CloudRefineIntent.confirm(for: capture)
+    issues[capture.id] = nil
+    await enqueue(capture)
+    monitorRefinement(capture)
+  }
+  private func monitorRefinement(_ capture: LocalCapture) {
+    guard refinementTasks[capture.id] == nil else { return }
+    pendingRefinements.insert(capture.id)
+    refinementTasks[capture.id] = Task { [self] in
+      defer {
+        refinementTasks[capture.id] = nil
+        pendingRefinements.remove(capture.id)
+      }
+      while !Task.isCancelled && CloudRefineIntent.pending(for: capture) {
+        await refresh(capture)
+        if states[capture.id]?.uploadComplete == true {
+          do {
+            try await refineInCloud(capture)
+            try CloudRefineIntent.complete(for: capture)
+            issues[capture.id] = nil
+          } catch { issues[capture.id] = "Retry cloud" }
+          return
+        }
+        if issues[capture.id] != nil { return }
+        do { try await Task.sleep(for: .seconds(1)) } catch { return }
+      }
+    }
   }
 
   func refineInCloud(_ capture: LocalCapture) async throws {
