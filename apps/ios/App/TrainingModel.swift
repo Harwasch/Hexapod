@@ -138,10 +138,7 @@
           if stopRequested { experience.cancel() } else { experience.fail() }
         }
         if !critical {
-          if let session { try? await session.closeAndCleanup() }
-          session = nil
-          nativePreview = nil
-          observer?.cancel(); previewObserver?.cancel()
+          try? await releaseSession()
         }
         operation = nil
       }
@@ -178,10 +175,7 @@
         try PhoneSplatRecord.save(ply: ply, sharpness: score, checkpoint: nil, for: capture,
           previewPNG: png, simulated: isSimulated)
       }.value
-      try await selected.closeAndCleanup()
-      session = nil
-      nativePreview = nil
-      observer?.cancel(); previewObserver?.cancel()
+      try await releaseSession(resultSaved: true)
       progress = 1
       experience.finish()
       try await loadResult(record.url(for: capture), bitmapOnly: previewImage != nil || LaunchMode.current.isUITest)
@@ -191,6 +185,19 @@
         try await Task.sleep(for: .milliseconds(600))
       }
       experience.showResult()
+    }
+    private func releaseSession(resultSaved: Bool = false) async throws {
+      observer?.cancel(); previewObserver?.cancel()
+      nativePreview = nil
+      surface = nil
+      if let session { try await session.closeAndCleanup() }
+      session = nil
+      if let output = TrainingOutputPolicy.removalURL(for: capture, stage: experience.stage,
+        sessionClosed: true, resultSaved: resultSaved) {
+        await Task.detached(priority: .utility) {
+          try? FileManager.default.removeItem(at: output)
+        }.value
+      }
     }
     private func waitForForeground() async throws {
       while !active && !stopRequested { try await Task.sleep(for: .milliseconds(100)) }
@@ -228,10 +235,7 @@
         operation = Task { [self] in
           do { try await finishRun(selected) } catch { experience.fail() }
           if !critical {
-            if session != nil { try? await selected.closeAndCleanup() }
-            session = nil
-            nativePreview = nil
-            observer?.cancel(); previewObserver?.cancel()
+            try? await releaseSession()
           }
           operation = nil
         }
@@ -246,10 +250,9 @@
       stopRequested = true
       await session?.cancel()
       await operation?.value
-      if let session { try? await session.closeAndCleanup() }
-      session = nil
-      nativePreview = nil
-      observer?.cancel(); previewObserver?.cancel()
+      if experience.stage.busy { experience.cancel() }
+      critical = false
+      try? await releaseSession()
     }
     func focus() {
       guard let scene else { return }
