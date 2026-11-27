@@ -2100,13 +2100,15 @@ package log, and reports all failures together. `app` builds the unsigned simula
 with macro validation skipped, retains its raw log alongside formatted console output,
 and lists every `error:` line in the step summary. `tests` follows `app` (45-minute limit),
 running each package with test targets on an available iPhone 17 Pro simulator, or the
-newest available iPhone/runtime. It also generates the `HexUITests` scheme and runs
-app UI flows on that simulator. Screenshot attachments are retained on passing tests,
+newest available iPhone/runtime. A separate `ui-tests` job also follows `app` and
+runs in parallel with `tests` (40-minute limit). It generates the `HexUITests` scheme,
+boots the simulator and waits for boot completion, then runs the app UI flows with
+per-test timeouts enabled and a 300-second default and maximum execution allowance. Screenshot attachments are retained on passing tests,
 exported with `xcresulttool export attachments`, and uploaded as `ios-ui-screenshots`
 even after a test failure. `ios-ui-result` retains the result bundle and raw UI log.
 SwiftPM and app DerivedData are cached by manifests.
 
-With `testflight=true`, `testflight` waits for all three jobs (45-minute limit), then
+With `testflight=true`, `testflight` waits for all four jobs (45-minute limit), then
 archives, signs and uploads the app. It skips with a message unless all four of these
 repository secrets exist. Make the key in App Store Connect → Users and Access →
 Integrations → App Store Connect API, with the **Admin** role: Apple lets only Admin keys
@@ -2123,7 +2125,7 @@ The iOS globe bundles local Cesium resources. With dependencies already present,
 `heavy bash apps/ios/ci_scripts/build_globe.sh` before XcodeGen. The independent `packages` and `app` jobs, plus the optional `testflight` job,
 provision Node/pnpm, install the lockfile, and run this command before their Xcode build.
 The package build needs the generated Globe resource directory even for compilation;
-`tests` downloads the real globe resources from `app` instead of rebuilding them.
+`tests` and `ui-tests` download the real globe resources from `app` instead of rebuilding them.
 Xcode Cloud's `ci_post_clone.sh` uses the same command and requires Node 22.12+, pnpm 10
 and the installed web dependencies in its environment. The generated approximately 11 MB
 resource tree is ignored in git; the source entry, schema and tiny splat fixture are tracked.

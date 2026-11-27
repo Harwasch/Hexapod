@@ -113,3 +113,33 @@ import Voice
   #expect(!restored.coverageColoursEnabled)
   renderer.stop()
 }
+
+@Test @MainActor func fixturePreviewSkipsTrackingPrerollAndSeedsOneStaticFrame() async throws {
+  let ios = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+    .deletingLastPathComponent().deletingLastPathComponent()
+  let directory = ios.appendingPathComponent("Fixtures/bundles/yard-small/bundle")
+  let suite = "hex.static-preview.\(UUID().uuidString)"
+  let defaults = try #require(UserDefaults(suiteName: suite))
+  defer { defaults.removePersistentDomain(forName: suite) }
+  let preference = LiveSplatPreference(store: UserDefaultsLiveSplatStore(defaults: defaults))
+  let renderer = DefaultLiveSplatRenderer(preference: preference)
+  renderer.start()
+  defer { renderer.stop() }
+  try await FixtureSplatPreview.seed(renderer: renderer, directory: directory)
+  #expect(!renderer.splats.isEmpty)
+  #expect(renderer.latestFrame != nil)
+  #expect(renderer.latestFrame?.timestamp == 1.0 / 6.0)
+  let guidance = FixtureSplatPreview.guidance(renderer: renderer)
+  #expect(guidance.tip != nil)
+  #expect(guidance.completedSectors == 0)
+}
+
+@Test @MainActor func fixtureCameraSourceFinishesAfterOneTrackedSnapshot() async throws {
+  let ios = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+    .deletingLastPathComponent().deletingLastPathComponent()
+  let source = FixtureCaptureSource(
+    directory: ios.appendingPathComponent("Fixtures/bundles/yard-small"), singleFrame: true)
+  var snapshots = 0
+  for try await _ in source.frames() { snapshots += 1 }
+  #expect(snapshots == 1)
+}

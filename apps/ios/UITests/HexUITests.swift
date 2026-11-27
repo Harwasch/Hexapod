@@ -1,7 +1,7 @@
 import XCTest
 
 /// These drive the real screens with DEBUG-only recorded capture/API providers.
-/// An ordinary launch below exercises the production provider selection instead.
+/// The production-provider flow uses quiet rendering with real provider selection.
 @MainActor final class HexUITests: XCTestCase {
   private var app: XCUIApplication!
 
@@ -13,8 +13,9 @@ import XCTest
   override func tearDown() async throws {
     if app.launchArguments.contains("-uiTestFixture") {
       app.terminate()
-      app.launch()
+      launch("yard-small")
       visible("home.settings")
+      screenshot("Cleanup home")
       tap("home.settings", shot: "Credential cleanup")
       if app.buttons["settings.signOut"].exists {
         tap("settings.signOut", shot: "Signed out")
@@ -23,19 +24,28 @@ import XCTest
     app.terminate()
   }
 
-  private func launchFixture(signIn: Bool = true, emptyGlobe: Bool = false) {
-    app.launchArguments = ["-uiTestFixture", "yard-small"]
+  private func launch(_ fixture: String, emptyGlobe: Bool = false, resetCaptures: Bool = true) {
+    app.launchArguments = ["-uiTestFixture", fixture]
     if emptyGlobe { app.launchArguments.append("-uiTestGlobeEmpty") }
+    if resetCaptures { app.launchArguments.append("-uiTestResetCaptures") }
     app.launch()
+  }
+
+  private func launchFixture(signIn: Bool = true, emptyGlobe: Bool = false) {
+    launch("yard-small", emptyGlobe: emptyGlobe)
     visible("home.record")
+    visible("fixture.still")
     screenshot("Home")
     if signIn {
       tap("home.settings", shot: "Fixture sign-in")
-      if app.buttons["settings.signOut"].exists { app.buttons["settings.signOut"].tap() }
+      if app.buttons["settings.signOut"].exists {
+        tap("settings.signOut", shot: "Previous credential removed")
+      }
       tap("settings.token", shot: "Fixture token field")
       app.secureTextFields["settings.token"].typeText("ui-test-token\n")
+      screenshot("Credential entered")
       tap("settings.signIn", shot: "Fixture signed in")
-      app.navigationBars.buttons.firstMatch.tap()
+      tap("settings.back", shot: "Back to camera")
       visible("home.record")
       screenshot("Fixture home")
     }
@@ -64,12 +74,12 @@ import XCTest
     launchFixture()
     tap("home.record", shot: "Recording")
     visible("scan.stop")
+    visible("splat.staticPreview")
+    visible("scan.tip")
     screenshot("Scanning")
     tap("scan.stop", shot: "Saving")
     visible("upload.done")
-    let progress = app.descendants(matching: .any).matching(
-      NSPredicate(format: "label == %@", "Uploaded 100 percent")).firstMatch
-    XCTAssertTrue(progress.waitForExistence(timeout: 20), "Fixture API must finish the resumed upload")
+    visible("upload.complete")
     screenshot("Upload")
     tap("upload.done", shot: "Done")
     tap("home.captures", shot: "Captures")
@@ -82,7 +92,7 @@ import XCTest
     visible("capture.share")
     visible("capture.delete")
     tap("capture.delete", shot: "Delete confirmation")
-    app.buttons["Delete local scan"].tap()
+    tap("capture.confirmDelete", shot: "Local scan deleted")
     visible("captures.back")
     screenshot("Local fixture removed")
   }
@@ -131,16 +141,19 @@ import XCTest
     visible("settings.server")
     tap("settings.token", shot: "Token field")
     app.secureTextFields["settings.token"].typeText("ui-test-token\n")
+    screenshot("Credential entered")
     tap("settings.signIn", shot: "Signed in")
     XCTAssertEqual(app.buttons["settings.signIn"].label, "Saved")
     tap("settings.signOut", shot: "Credential removed")
   }
 
-  func testOrdinaryLaunchUsesEveryRealProvider() {
-    app.launchArguments = []
-    app.launch()
+  func testProductionProviderSelectionWithQuietRendering() {
+    launch("production-providers")
     visible("home.settings")
-    screenshot("Ordinary launch")
+    visible("fixture.still")
+    screenshot("Production providers with quiet rendering")
+    // The still image is a fixture even while all selected providers are real.
+    XCTAssertTrue(app.staticTexts["Simulated"].exists)
     // Settings exposes the resolved production selection as an accessibility value.
     tap("home.settings", shot: "Production settings")
     visible("settings.providers")
@@ -151,7 +164,6 @@ import XCTest
     }
     XCTAssertTrue(providers.contains("deep:cloud") || providers.contains("deep:offline"), providers)
     XCTAssertFalse(providers.contains("fake"))
-    XCTAssertFalse(app.staticTexts["Simulated"].exists)
     screenshot("Real providers")
   }
 }

@@ -226,29 +226,124 @@ xcrun xcresulttool export attachments --path apps/ios/build/HexUITests.xcresult 
   --output-path apps/ios/build/ui-screenshots
 ```
 
-The workflow runs package and app UI tests before TestFlight, retaining the full
+The workflow runs package `tests` and `ui-tests` in parallel after `app`, retaining the full
 result bundle and `ios-ui-screenshots`. Every UI step attaches a screenshot with
 `lifetime = .keepAlways`. Screenshots are evidence produced by the simulator run;
-Linux does not produce substitutes for these attachments.
+Linux does not produce substitutes for these attachments. The UI job has a 40-minute
+limit, boots the selected simulator and waits for `bootstatus -b` before Xcode runs,
+and gives each test a 300-second default and maximum execution allowance.
 
 UI fixtures launch with `-uiTestFixture yard-small`. The Xcode build copies the
-recorded bundle under `UITestFixtures/yard-small` only in Debug, and removes it in
-Release. The camera handles that argument only in DEBUG and replays the recorded source without
-changing saved provider preferences. `UIFixtureAPIProtocol` registers before app network
-tasks start, intercepts app HTTP requests, returns an already uploaded fixture to exercise
-the uploader's resume path, and fails unknown requests locally. It never contacts the
-production API. The tests enter a fixture credential through Settings and remove it
-afterward; normal launches retain the real providers. Background multipart transfers
-remain a separate device gate. The UI tests require these camera identifiers:
-`home.record`, `scan.stop`, `upload.done`, `home.captures`, `home.globe`,
-`home.settings`, `ask.microphone`, `answer.pin.1`, `entity.card`.
-The native screens add `capture.row.<local-id>`, `capture.detail`, `capture.status`,
-`capture.share`, `capture.delete`, `capture.openGlobe`, `globe.scanPicker`,
-`globe.scan.<capture-id>`, `settings.token`, `settings.signIn`, `settings.server`.
-The ordinary launch test omits fixture arguments and checks the actual registry
-selection through DEBUG's `settings.providers` accessibility value. Deep answers
-may be explicitly unavailable when no credential is present; fake providers fail
-that assertion.
+recorded bundle under `UITestFixtures/yard-small` only in Debug and removes it in
+Release. `App/Support/LaunchMode.swift` reads the arguments once; Release ignores
+them. It supplies the frozen clock, provider selection, capture storage and API seam.
+Without this switch, production rendering, providers and timing retain their behavior.
+
+In UI-test mode:
+
+- The camera shows the fixture's first RGB frame, without constructing an ARView or
+  starting ARKit, the live perception driver or Vision inference. The answer flow uses
+  fixture perception, voice and answers.
+- Recording seeds one tracked CPU splat frame after tracking pre-roll. A static Canvas
+  displays its initial coverage colours at time zero, without Metal or a display link.
+  Guidance resolves once from that frame and freezes, including the tip and coverage ring.
+- Camera timelines use one date; UIKit/SwiftUI animations and haptics are disabled.
+  Capture screens refresh once. Replay uses a still image. Standalone developer probes
+  and the hardware training benchmark are disabled.
+- Cesium is created and loaded when its screen opens. The test session forces bundled
+  resources, bundled Natural Earth imagery and ellipsoid terrain; no online map providers
+  or heap polling. Its clock stops, flights are instant and rendering is on request.
+- Captures and upload state live in Application Support/UITest/{Captures,Uploads}.
+  `-uiTestResetCaptures` clears only that isolated inventory before launch. The harness
+  uses it by default; omit it for a relaunch/resume test. `-uiTestGlobeEmpty` selects the
+  existing empty-site fixture. Both flags require `-uiTestFixture`.
+
+### In-process fixture API
+
+`LaunchMode.current.captureAPI` selects `InProcessFixtureCaptureAPI` behind
+`FixtureCaptureServing`, only in Debug UI-test mode. This is the chosen API stub:
+`CaptureUploadQueue` uses it for store/refine, and the capture catalog refresh uses
+it for status. It constructs no URLSession or background upload. Site selection and
+globe snapshots use `FakeGlobeDataSource`. The tests enter a fixture credential through
+Settings and remove it afterward, exercising the existing Keychain UI.
+
+Store writes the real durable `UploadState` to the isolated upload folder, with
+`storedInCloud=true`, no job, and catalog status `not-started`/empty jobs. The real
+status presentation therefore shows **Stored in cloud** and enables **Refine in cloud**.
+Only the explicit Refine confirmation calls `refine`; the stub persists a fixed job
+ID and immediately returns **Ready** on the next status read. Repeated calls and
+relaunches retain that result until an explicit fixture reset. No timer advances the
+server state, no cloud job is queued and no production API is contacted. Unit tests
+cover the complete stored/refine/ready transition and reload from disk. Real multipart
+transfers, retry budgets and cloud progress remain device/service gates.
+
+The production-provider probe uses `-uiTestFixture production-providers`: it keeps
+quiet rendering and the recorded still while resolving real camera providers. It
+checks that selection through Debug's `settings.providers` accessibility value.
+It starts no camera, voice or inference work, and its capture/catalog entry points
+still select the in-process API. This is a selection check; the Linux default-mode
+regression test separately verifies that ordinary launches select no fixture client.
+
+The existing UI tests use `home.record`, `scan.stop`, `scan.tip`, `fixture.still`,
+`splat.staticPreview`, `upload.done`, `upload.complete`, `home.captures`, `home.globe`,
+`home.settings`, `ask.microphone`, `answer.pin.1` and `entity.card`. Capture screens
+provide `capture.row.<local-id>`, `capture.detail`, `capture.status`, `capture.refine`,
+`capture.share`, `capture.delete`, `capture.confirmDelete` and `capture.openGlobe`.
+The globe provides `globe.scanPicker`, `globe.scan.<capture-id>`, `globe.empty` and
+`globe.back`; Settings provides `settings.token`, `settings.signIn`, `settings.signOut`,
+`settings.server`, `settings.providers` and the test-mode `settings.back`.
+`ci_scripts/test_ui_tests.py` checks the identifiers used by XCUITest against app/module
+accessibility declarations, including generated identifiers.
+
+### PhoneTrain seam and adding the later flow tests
+
+`PhoneTrain.PhoneTrainingSession` is a Sendable protocol for progress, lifecycle,
+run/result, preview image and cleanup. `DevicePhoneTrainingSession` adapts the existing
+`PhoneTrainer` actor; the real trainer's implementation and API are unchanged.
+`PhoneTrainingFactory.make(outputDirectory:real:)` is the app selection point. Its
+real-construction closure is evaluated on ordinary launches. Only a Debug UI-test
+launch selects `FixturePhoneTrainingSession`, with a PNG decoded from the fixture's
+still. There is no persisted setting or provider-menu choice for the fake.
+
+The fake has three finite steps, emits `TrainProgress` with a Simulated message,
+returns the same PNG on preview requests and writes a fixed one-Gaussian `trained.ply`
+result marked `simulated=true`. It uses no Metal, training dataset preparation,
+timer or sleeps. Pause/inactivity wait on continuations; resume, cancellation and
+close wake them. The UI must label this output Simulated. The real adapter exports
+after a finished run and forwards lifecycle controls. Its `previewImage()` returns
+nil: native preview consumers keep using `trainer.submitPreview(...)` and await the
+submission's `waitUntilReady()` before presenting the surface.
+
+The train/result/in-place/refine UI is being built separately. Add its tests after
+those screens and identifiers land:
+
+1. Route the new training screen's construction through `PhoneTrainingFactory.make`.
+   Pass a closure that prepares the real dataset and returns
+   `DevicePhoneTrainingSession(trainer: ...)`. Keep output outside the immutable
+   capture bundle, for example beside Captures in `PhoneTrain/<capture-id>` under the
+   same storage root. Start observing `progress()` before calling `run()`; use
+   `previewImage()` for the fixture and the native preview seam on a real phone.
+2. Forward scene activity to `setActive`, user controls to pause/resume/cancel, and
+   await the running task before `closeAndCleanup`. Present `PhoneTrainingResult.ply`
+   through the result/in-place UI, preserving its Simulated label. In-place fixture
+   viewing must keep the still-camera path instead of starting a second AR session.
+3. Keep cloud storage/status/refinement routed through `CaptureUploadQueue` and the
+   existing catalog refresh seam. Do not create a separate transport in the new UI.
+   Upload alone must leave the stub Stored in cloud; the confirmed Refine action
+   deterministically makes it Ready. Derive `captures.badge.*` from that same status.
+4. Add the agreed `train.*`, `result.*`, `inplace.*`, `refine.*` and
+   `captures.badge.*` accessibility identifiers to the actual controls. Check each
+   literal identifier against source, and extend the identifier audit's prefix list.
+   The current app still uses `capture.refine`; update the audit and any callers if
+   the new UI replaces it.
+5. Extend `HexUITests` using `launchFixture()`, `visible`, `tap` and `screenshot`:
+   scan → stop → train → result → view in place → confirmed Refine → capture badge.
+   Wait for identifiers/state predicates, attach a screenshot at every transition,
+   and assert the Simulated label and final Ready state. Test cancel/resume separately;
+   for relaunch persistence use `launch("yard-small", resetCaptures: false)`.
+6. Run the relevant Linux seam tests and identifier audit, then run `ui_tests.py` on
+   macOS. Inspect `ios-ui-screenshots` and the xcresult even on failure. Keep the
+   300-second per-test limit and four-job TestFlight gate; do not add a bypass input.
 
 For the bundled globe's browser acceptance on a separate port:
 

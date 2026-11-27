@@ -7,67 +7,6 @@ import SwiftUI
 import UniformTypeIdentifiers
 import Voice
 
-#if DEBUG
-  /// Explicit UI launches intercept control requests before URLSession.shared starts.
-  /// The server reports an already uploaded fixture, exercising the uploader's resume
-  /// path without a background object-store transfer or any production API request.
-  final class UIFixtureAPIProtocol: URLProtocol, @unchecked Sendable {
-    override class func canInit(with request: URLRequest) -> Bool {
-      UIFixtureLaunch.active && ["https", "http"].contains(request.url?.scheme ?? "")
-    }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-    override func startLoading() {
-      guard let url = request.url else { return }
-      let path = url.path
-      let captureID = FakeGlobeDataSource.scanID.uuidString.lowercased()
-      let siteID = FakeGlobeDataSource.siteID.uuidString.lowercased()
-      var status = 200
-      let payload: Any
-      if path.contains("/captures/bundles/"),
-        (body()["siteId"] as? String)?.lowercased() == siteID
-      {
-        payload = ["id": captureID]
-      } else if path.hasSuffix("/captures/" + captureID + "/bundle-upload"),
-        let bytes = body()["bytes"] as? NSNumber
-      {
-        payload = ["id": "00000000-0000-0000-0000-000000000005", "status": "complete", "bytes": bytes] as [String: Any]
-      } else if path.hasSuffix("/captures/" + captureID + "/process-bundle") {
-        payload = ["id": "00000000-0000-0000-0000-000000000006"]
-      } else if path.hasSuffix("/captures/" + captureID) {
-        payload = ["status": "complete", "siteId": siteID]
-      } else if path.hasSuffix("/sites") {
-        payload = [["id": siteID, "name": "Simulated property"]]
-      } else {
-        // Unknown requests fail locally. They must never fall through to the network.
-        status = 503
-        payload = ["detail": "Fixture unavailable"]
-      }
-      guard let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1",
-        headerFields: ["Content-Type": "application/json"]),
-        let data = try? JSONSerialization.data(withJSONObject: payload)
-      else { return }
-      client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-      client?.urlProtocol(self, didLoad: data)
-      client?.urlProtocolDidFinishLoading(self)
-    }
-    override func stopLoading() { /* Responses are synchronous and own no task. */ }
-    private func body() -> [String: Any] {
-      var data = request.httpBody ?? Data()
-      if data.isEmpty, let stream = request.httpBodyStream {
-        stream.open()
-        defer { stream.close() }
-        var bytes = [UInt8](repeating: 0, count: 4096)
-        while data.count < 65_536 {
-          let count = stream.read(&bytes, maxLength: bytes.count)
-          guard count > 0 else { break }
-          data.append(contentsOf: bytes.prefix(count))
-        }
-      }
-      return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
-    }
-  }
-#endif
-
 @MainActor struct CameraHost: View {
   let registry: PieceRegistry
   @State private var model: CameraModel?
@@ -216,7 +155,10 @@ import Voice
           }
           Text(result)
         }
-      }.navigationTitle("Piece testing")
+      }
+      // Standalone probes intentionally run real services; fixture automation uses the app seams.
+      .disabled(LaunchMode.current.isUITest)
+      .navigationTitle("Piece testing")
     }
     .fileImporter(isPresented: $importFixture, allowedContentTypes: [.folder]) { selection in
       do {

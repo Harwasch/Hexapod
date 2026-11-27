@@ -25,6 +25,7 @@ private enum CameraStyle {
   @State private var showSites = false
   @AppStorage("hex.testflight.debugEnabled") private var testFlightDebug = false
   @State private var latestThumbnail: UIImage?
+  @State private var fixtureBackground: UIImage?
   private let onCaptures: (() -> Void)?
   private let onSettings: (() -> Void)?
   private let onGlobe: (() -> Void)?
@@ -53,7 +54,7 @@ private enum CameraStyle {
   var body: some View {
     ZStack {
       CameraStyle.background.ignoresSafeArea()
-      ARCameraView(isActive: scenePhase == .active, model: model).ignoresSafeArea()
+      cameraSurface
       LinearGradient(
         colors: [.clear, .black.opacity(0.65)], startPoint: .center, endPoint: .bottom
       )
@@ -74,10 +75,10 @@ private enum CameraStyle {
             .position(x: pin.x, y: pin.y)
         }
       }.ignoresSafeArea()
-      TimelineView(.periodic(from: .now, by: 0.25)) { context in
+      CameraTimeline { date in
         GeometryReader { geometry in
           VStack {
-            header(at: context.date)
+            header(at: date)
             if model.recording, let tip = model.scanGuidance.tip {
               Label(tip.rawValue, systemImage: tip.symbol)
                 .font(.system(size: 15, weight: .semibold))
@@ -106,7 +107,7 @@ private enum CameraStyle {
               }
             }
             Spacer()
-            if model.simulated {
+            if model.simulated || LaunchMode.current.isUITest {
               Text("Simulated").font(.caption).padding(8).background(.black, in: Capsule())
             }
             if !model.cameraReady {
@@ -133,7 +134,9 @@ private enum CameraStyle {
             if model.card == nil { controls }
           }
           .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 18)
-          .animation(.easeInOut(duration: 0.25), value: model.scanGuidance.tip)
+          .animation(
+            LaunchMode.current.isUITest ? nil : .easeInOut(duration: 0.25),
+            value: model.scanGuidance.tip)
 
         }
       }
@@ -158,6 +161,38 @@ private enum CameraStyle {
     .onDisappear {
       setPressing(false)
       model.suspend()
+    }
+  }
+
+  @ViewBuilder private var cameraSurface: some View {
+    if LaunchMode.current.isUITest {
+      GeometryReader { geometry in
+        Group {
+          if let fixtureBackground {
+            Image(uiImage: fixtureBackground).resizable().scaledToFill()
+          }
+        }
+        .frame(width: geometry.size.width, height: geometry.size.height).clipped()
+        .task(id: scenePhase) {
+          guard scenePhase == .active else { return }
+          if let directory = LaunchMode.current.previewDirectory {
+            fixtureBackground = await CapturePreview.image(directory: directory)
+          }
+          model.beginUITestPreview(size: geometry.size)
+        }
+      }.ignoresSafeArea()
+        .accessibilityElement(children: .ignore).accessibilityLabel("Fixture camera still")
+        .accessibilityIdentifier("fixture.still")
+      if model.recording, model.splatEnabled, model.previewGeneration > 0,
+        let renderer = model.liveSplat as? DefaultLiveSplatRenderer
+      {
+        FixtureSplatOverlay(renderer: renderer)
+          .accessibilityElement(children: .ignore).accessibilityLabel("Static scan preview")
+          .accessibilityIdentifier("splat.staticPreview")
+          .allowsHitTesting(false).ignoresSafeArea()
+      }
+    } else {
+      ARCameraView(isActive: scenePhase == .active, model: model).ignoresSafeArea()
     }
   }
 
@@ -269,11 +304,14 @@ private enum CameraStyle {
       )
       .font(.system(size: 24, weight: .medium)).multilineTextAlignment(.center)
       .padding(.horizontal, 12)
-      TimelineView(.animation(minimumInterval: 0.15)) { timeline in
+      CameraTimeline(waveform: true) { date in
         HStack(spacing: 5) {
           ForEach(0..<14) { i in
-            let phase = timeline.date.timeIntervalSinceReferenceDate * 4 + Double(i)
-            let height = CGFloat(10 + 28 * abs(sin(phase)))
+            let index: Double = Double(i)
+            let time: Double = date.timeIntervalSinceReferenceDate * 4
+            let phase: Double = time + index
+            let amplitude: Double = 28 * abs(sin(phase))
+            let height: CGFloat = CGFloat(10 + amplitude)
             Capsule().fill(CameraStyle.amber).frame(
               width: 5, height: height)
           }
@@ -348,8 +386,7 @@ private enum CameraStyle {
   private func loadLatestThumbnail() async {
     var directory = model.latestCapture
     if directory == nil {
-      let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("Captures")
+      let root = LaunchMode.current.captureRoot
       directory = try? await Task.detached {
         try LocalCapture.list(at: root).max { left, right in
           let a = try? left.directory.resourceValues(forKeys: [.creationDateKey]).creationDate
@@ -431,6 +468,7 @@ private struct ProgressRing: View {
                 .system(size: 13, weight: .medium, design: .monospaced))
             }.frame(width: 56, height: 56).accessibilityLabel(
               "Uploaded \(Int(progress * 100)) percent")
+              .accessibilityIdentifier(progress == 1 ? "upload.complete" : "upload.progress")
           }
           VStack(alignment: .leading, spacing: 3) {
             Text(siteName ?? "Capture").font(.system(size: 17, weight: .semibold)).lineLimit(1)
@@ -462,6 +500,7 @@ private struct ProgressRing: View {
       await upload()
       while !Task.isCancelled {
         await queue.refresh(capture)
+        if LaunchMode.current.isUITest { return }
         try? await Task.sleep(for: .seconds(1))
       }
     }
@@ -476,8 +515,15 @@ private struct ProgressRing: View {
   let directory: URL
   @Environment(\.dismiss) private var dismiss
   @State private var player: AVPlayer?
+  @State private var still: UIImage?
   var body: some View {
-    VideoPlayer(player: player).ignoresSafeArea()
+    Group {
+      if LaunchMode.current.isUITest {
+        if let still { Image(uiImage: still).resizable().scaledToFit() }
+      } else {
+        VideoPlayer(player: player)
+      }
+    }.ignoresSafeArea()
       .overlay(alignment: .topTrailing) {
         Button {
           dismiss()
@@ -487,8 +533,12 @@ private struct ProgressRing: View {
         .accessibilityLabel("Close replay").padding()
       }
       .task {
-        player = AVPlayer(url: directory.appendingPathComponent("rgb.mov"))
-        player?.play()
+        if LaunchMode.current.isUITest {
+          still = await CapturePreview.image(directory: directory)
+        } else {
+          player = AVPlayer(url: directory.appendingPathComponent("rgb.mov"))
+          player?.play()
+        }
       }
       .onDisappear {
         player?.pause()
@@ -534,6 +584,10 @@ private struct ProgressRing: View {
       }
       .task {
         defer { loading = false }
+        if LaunchMode.current.isUITest {
+          sites = (try? await FakeGlobeDataSource().sites()) ?? []
+          return
+        }
         guard let root = ServiceConfiguration(defaults: .standard).apiRoot else {
           failed = true
           return
@@ -561,7 +615,8 @@ private struct ScanCoverageRing: View {
       }
     }
     .frame(width: 79, height: 79)
-    .animation(reduceMotion ? nil : .easeInOut(duration: 0.5), value: sectors)
+    .animation(
+      reduceMotion || LaunchMode.current.isUITest ? nil : .easeInOut(duration: 0.5), value: sectors)
     .accessibilityHidden(true)
   }
 
@@ -577,5 +632,20 @@ private struct ScanCoverageRing: View {
     return Circle().trim(from: start, to: end)
       .stroke(colour, style: StrokeStyle(lineWidth: 4, lineCap: .round))
       .shadow(color: glow, radius: 4)
+  }
+}
+
+/// The fixture clock creates no repeating schedule.
+private struct CameraTimeline<Content: View>: View {
+  var waveform = false
+  @ViewBuilder let content: (Date) -> Content
+  var body: some View {
+    if LaunchMode.current.isUITest {
+      content(LaunchMode.current.date())
+    } else if waveform {
+      TimelineView(.animation(minimumInterval: 0.15)) { content($0.date) }
+    } else {
+      TimelineView(.periodic(from: .now, by: 0.25)) { content($0.date) }
+    }
   }
 }
