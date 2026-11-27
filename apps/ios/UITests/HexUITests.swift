@@ -89,7 +89,7 @@ import XCTest
     screenshot("Upload")
     tap("upload.done", shot: "Done")
     tap("home.captures", shot: "Captures")
-    let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "capture.row.")).firstMatch
+    let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "capture.row.")).firstMatch
     XCTAssertTrue(row.waitForExistence(timeout: 20))
     screenshot("Capture list")
     row.tap()
@@ -140,7 +140,7 @@ import XCTest
     launch("yard-small", resetCaptures: false)
     tap("home.captures", shot: "Saved training after relaunch")
     visible("captures.badge.phone")
-    let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "capture.row.")).firstMatch
+    let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "capture.row.")).firstMatch
     XCTAssertTrue(row.waitForExistence(timeout: 20))
     row.tap()
     tap("train.start", shot: "Saved phone result opened")
