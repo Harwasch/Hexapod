@@ -207,7 +207,7 @@ private struct CaptureQualityBadge: View {
             }
           }
           .buttonStyle(.borderedProminent).frame(minHeight: 44)
-          .accessibilityIdentifier(TrainingID.refine)
+          .accessibilityIdentifier("capture.refine")
           .disabled(
             refining || !CaptureStatus.refineEnabled(
               upload: capture.local.upload, remote: capture.remote,
@@ -222,8 +222,8 @@ private struct CaptureQualityBadge: View {
             connectionRetry += 1
           }.frame(minHeight: 44)
         }
-        if capture.remote?.fullError != nil || capture.local.upload?.lastError != nil {
-          Text("This scan needs another try.").font(.footnote)
+        if let error = capture.remote?.fullError ?? capture.local.upload?.lastError {
+          Text(error).font(.footnote).textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         if let route = capture.route {
@@ -251,7 +251,7 @@ private struct CaptureQualityBadge: View {
             .frame(minHeight: 48).accessibilityIdentifier(TrainingID.shareCloud)
         }
         HStack(spacing: 32) {
-          ShareLink(item: capture.local.phoneSplat?.url(for: capture.local) ?? capture.video) {
+          ShareLink(item: capture.video) {
             Label("Share", systemImage: "square.and.arrow.up")
           }
             .frame(minHeight: 44).accessibilityIdentifier("capture.share")
