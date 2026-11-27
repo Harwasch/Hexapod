@@ -135,7 +135,7 @@ private enum CameraStyle {
           }
           .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 18)
           .animation(
-            LaunchMode.current.isUITest ? nil : .easeInOut(duration: 0.25),
+            LaunchMode.current.isUITest ? Animation?.none : Animation.easeInOut(duration: 0.25),
             value: model.scanGuidance.tip)
 
         }
@@ -616,7 +616,8 @@ private struct ScanCoverageRing: View {
     }
     .frame(width: 79, height: 79)
     .animation(
-      reduceMotion || LaunchMode.current.isUITest ? nil : .easeInOut(duration: 0.5), value: sectors)
+      reduceMotion || LaunchMode.current.isUITest
+        ? Animation?.none : Animation.easeInOut(duration: 0.5), value: sectors)
     .accessibilityHidden(true)
   }
 
