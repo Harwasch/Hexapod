@@ -15,7 +15,6 @@
       var projection: simd_float4x4
       var viewport: SIMD4<Float>
     }
-    private let device: any MTLDevice
     private let points: any MTLBuffer
     private let standard: any MTLRenderPipelineState
     private let hdr: any MTLRenderPipelineState
@@ -23,19 +22,32 @@
     private let lock = NSLock()
     private var liveCamera = false
     private var liveMatrices: (simd_float4x4, simd_float4x4)?
-    private var order: (any MTLBuffer)?
+    // Shared index storage is reused only after every reader's command completes.
+    private struct OrderSlot {
+      let buffer: any MTLBuffer
+      var readers = 0
+    }
+    private var orderBuffers: [OrderSlot] = []
+    private var orderIndex: Int?
     private var uniforms = Uniforms(view: matrix_identity_float4x4,
       projection: matrix_identity_float4x4, viewport: SIMD4(1, 1, 0, 0))
 
     public init(scene: SavedSplat) throws {
       guard let device = MTLCreateSystemDefaultDevice() else { throw LiveSplatError.unavailable }
-      self.device = device
-      count = scene.gaussians.count
+      let gaussianCount = scene.gaussians.count
+      count = gaussianCount
       let buffer = scene.gaussians.withUnsafeBytes { bytes in
         device.makeBuffer(bytes: bytes.baseAddress!, length: bytes.count, options: .storageModeShared)
       }
       guard let buffer else { throw LiveSplatError.unavailable }
       points = buffer
+      var slots: [OrderSlot] = []
+      for _ in 0..<3 {
+        guard let order = device.makeBuffer(length: gaussianCount * MemoryLayout<UInt32>.stride,
+          options: .storageModeShared) else { throw LiveSplatError.unavailable }
+        slots.append(OrderSlot(buffer: order))
+      }
+      orderBuffers = slots
       let library = try device.makeDefaultLibrary(bundle: .module)
       func pipeline(_ format: MTLPixelFormat) throws -> any MTLRenderPipelineState {
         let descriptor = MTLRenderPipelineDescriptor()
@@ -54,16 +66,21 @@
       hdr = try pipeline(.rgba16Float)
     }
 
-    public func update(view: simd_float4x4, projection: simd_float4x4,
-      size: SIMD2<Float>, opacity: Float, indices: Data) {
-      let next = indices.withUnsafeBytes { bytes -> (any MTLBuffer)? in
-        guard let base = bytes.baseAddress, bytes.count == count * 4 else { return nil }
-        return device.makeBuffer(bytes: base, length: bytes.count, options: .storageModeShared)
-      }
+    @discardableResult public func update(view: simd_float4x4, projection: simd_float4x4,
+      size: SIMD2<Float>, opacity: Float, indices: Data? = nil) -> Bool {
       lock.withLock {
-        order = next
         uniforms = Uniforms(view: view, projection: projection,
           viewport: SIMD4(max(1,size.x), max(1,size.y), opacity, 0))
+        guard let indices else { return true }
+        guard indices.count == count * MemoryLayout<UInt32>.stride,
+          let slot = orderBuffers.firstIndex(where: { $0.readers == 0 }) else { return false }
+        indices.withUnsafeBytes { bytes in
+          if let base = bytes.baseAddress {
+            orderBuffers[slot].buffer.contents().copyMemory(from: base, byteCount: bytes.count)
+          }
+        }
+        orderIndex = slot
+        return true
       }
     }
 
@@ -94,10 +111,16 @@
     }
 
     public func render(to target: any MTLTexture, command: any MTLCommandBuffer, clear: Bool) {
-      var snapshot = lock.withLock { () -> (Uniforms, (any MTLBuffer)?) in
+      var snapshot = lock.withLock { () -> (Uniforms, Int?) in
         var values = uniforms
         if let liveMatrices { values.view = liveMatrices.0; values.projection = liveMatrices.1 }
-        return (values, order)
+        if let orderIndex { orderBuffers[orderIndex].readers += 1 }
+        return (values, orderIndex)
+      }
+      if let slot = snapshot.1 {
+        command.addCompletedHandler { [self] _ in
+          lock.withLock { orderBuffers[slot].readers -= 1 }
+        }
       }
       let pass = MTLRenderPassDescriptor()
       pass.colorAttachments[0].texture = target
@@ -105,7 +128,8 @@
       pass.colorAttachments[0].storeAction = .store
       pass.colorAttachments[0].clearColor = MTLClearColor(red: 0.018, green: 0.03, blue: 0.035, alpha: 1)
       guard let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { return }
-      guard let index = snapshot.1 else { encoder.endEncoding(); return }
+      guard let slot = snapshot.1 else { encoder.endEncoding(); return }
+      let index = lock.withLock { orderBuffers[slot].buffer }
       encoder.setRenderPipelineState(target.pixelFormat == .rgba16Float ? hdr : standard)
       encoder.setVertexBuffer(points, offset: 0, index: 0)
       encoder.setVertexBuffer(index, offset: 0, index: 1)

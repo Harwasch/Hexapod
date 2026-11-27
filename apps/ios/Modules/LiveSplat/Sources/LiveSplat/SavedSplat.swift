@@ -92,19 +92,7 @@ public struct SavedSplat: Sendable {
 
   /// Far-to-near, stable ties. Caller runs this off MainActor, one request at a time.
   public func sortedIndices(viewRows: [Float]) -> Data {
-    guard viewRows.count == 16 else { return Data() }
-    var order: [(UInt32, Float)] = []
-    order.reserveCapacity(gaussians.count)
-    for i in gaussians.indices {
-      let p = gaussians[i].position
-      let z = p.x*viewRows[8] + p.y*viewRows[9] + p.z*viewRows[10] + viewRows[11]
-      order.append((UInt32(i), z))
-    }
-    order.sort { $0.1 == $1.1 ? $0.0 < $1.0 : $0.1 < $1.1 }
-    var result: [UInt32] = []
-    result.reserveCapacity(order.count)
-    for item in order { result.append(item.0) }
-    return result.withUnsafeBytes { Data($0) }
+    SavedSplatSortData(scene: self).sortedIndices(viewRows: viewRows)
   }
 }
 

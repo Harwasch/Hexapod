@@ -20,7 +20,8 @@
     var surface: MetalPreviewSurface?
     var previewImage: UIImage?
     private var previewPNG: Data?
-    var scene: SavedSplat?
+    var scene: SavedSplatSortData?
+    private var sortedDirection: SIMD3<Float>?
     var renderer: SavedSplatRenderer?
     var orbit = SplatOrbit()
     var shareURL: URL?
@@ -73,6 +74,7 @@
       surface = nil
       scene = nil
       renderer = nil
+      sortedDirection = nil
       let config = best ? PhoneTrainingConfig.best : PhoneTrainingConfig.quick
       operation = Task { [self] in
         do {
@@ -111,7 +113,10 @@
             await nativePreview.setPreviewPose(try CameraPose(elements: orbit.pose))
             let previews = await nativePreview.previews()
             previewObserver = Task { [weak self] in
-              for await surface in previews { self?.surface = surface }
+              for await surface in previews {
+                guard !Task.isCancelled else { return }
+                self?.surface = surface
+              }
             }
           } else {
             previewPNG = try await selected.previewImage()
@@ -215,8 +220,10 @@
       let result = try await Task.detached(priority: .userInitiated) {
         try SavedSplat(data: Data(contentsOf: url, options: .mappedIfSafe))
       }.value
-      scene = result
+      if onlyWhileChoosing && experience.stage != .choosing { return }
       renderer = try SavedSplatRenderer(scene: result)
+      scene = SavedSplatSortData(scene: result)
+      sortedDirection = nil
       shareURL = url
       orbit.center = result.center
       orbit.distance = max(0.3, result.radius * 2.4)
@@ -297,10 +304,15 @@
           SIMD4(0,0,depthScale,-1), SIMD4(0,0,depthOffset,0)))
       }
       let rows = Self.rows(view)
-      let indices = await Task.detached(priority: .userInitiated) { scene.sortedIndices(viewRows: rows) }.value
-      guard active else { return }
-      renderer.update(view: view, projection: projection,
-        size: SIMD2(Float(size.width),Float(size.height)), opacity: inPlace ? cameraOpacity : 1, indices: indices)
+      var indices: Data?
+      if SplatSortPolicy.shouldSort(previous: sortedDirection, viewRows: rows) {
+        indices = await Task.detached(priority: .userInitiated) { scene.sortedIndices(viewRows: rows) }.value
+      }
+      guard active, renderer === self.renderer else { return }
+      let accepted = renderer.update(view: view, projection: projection,
+        size: SIMD2(Float(viewport.width), Float(viewport.height)),
+        opacity: inPlace ? cameraOpacity : 1, indices: indices)
+      if accepted, indices != nil { sortedDirection = SplatSortPolicy.direction(viewRows: rows) }
     }
     static func matrix(_ rows: [Float]) -> simd_float4x4 {
       simd_float4x4(columns: (SIMD4(rows[0],rows[4],rows[8],rows[12]),
