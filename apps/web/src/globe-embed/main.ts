@@ -4,6 +4,7 @@ import {
   Cartesian3,
   Color,
   Entity,
+  ImageryLayer,
   PolygonHierarchy,
   ScreenSpaceEventHandler,
   ScreenSpaceEventType,
@@ -11,6 +12,7 @@ import {
 } from "cesium";
 import { createGlobeWidget } from "@/cesium/createGlobeWidget";
 import { installBasemap } from "./basemap";
+import { createNaturalEarthProvider } from "@/cesium/providers/imagery";
 import { createEmbedScanTileset } from "@/cesium/providers/tiles";
 import { addAnswerPins } from "@/features/answers/answerPinLayer";
 import { dispatchMessage } from "./bridge";
@@ -25,6 +27,7 @@ import "./style.css";
 
 declare global {
   interface Window {
+    hexUITestMode?: boolean;
     globeBridge?: { receive(value: unknown): void };
     webkit?: { messageHandlers?: { globe?: { postMessage(value: BridgeMessage): void } } };
   }
@@ -48,6 +51,12 @@ window.addEventListener("pagehide", removeErrors, { once: true });
 try {
   const memoryTier = restoreMemoryTier();
   const viewer = createGlobeWidget(element("#globe"), element("#credits"));
+  // Injected by the DEBUG native session before this bundled module runs.
+  if (window.hexUITestMode) {
+    viewer.clock.shouldAnimate = false;
+    viewer.scene.requestRenderMode = true;
+    viewer.scene.maximumRenderTimeChange = Number.POSITIVE_INFINITY;
+  }
   const removeRenderError = viewer.scene.renderError.addEventListener(() => {
     status.textContent = "Globe rendering failed";
     emit({ version: 1, type: "failure", message: "Globe rendering failed" });
@@ -72,15 +81,34 @@ try {
   });
   viewer.scene.globe.tileCacheSize = 64;
   viewer.scene.globe.maximumScreenSpaceError = 4;
-  const removeBasemap = installBasemap(
-    viewer,
-    import.meta.env.VITE_CESIUM_ION_ACCESS_TOKEN,
-    (message) => {
-      mapStatus.textContent = message;
-      if (message) emit({ version: 1, type: "failure", message });
-    },
-    terrainReady,
-  );
+  let removeBasemap: () => void;
+  if (window.hexUITestMode) {
+    // Bundled imagery and ellipsoid terrain only: no ion, OSM or terrain HTTP calls.
+    terrainReady();
+    let disposed = false;
+    removeBasemap = () => {
+      disposed = true;
+    };
+    void createNaturalEarthProvider()
+      .then((provider) => {
+        if (disposed) return;
+        viewer.imageryLayers.add(new ImageryLayer(provider));
+        viewer.scene.requestRender();
+      })
+      .catch(() => {
+        if (!disposed) mapStatus.textContent = "Fixture imagery unavailable";
+      });
+  } else {
+    removeBasemap = installBasemap(
+      viewer,
+      import.meta.env.VITE_CESIUM_ION_ACCESS_TOKEN,
+      (message) => {
+        mapStatus.textContent = message;
+        if (message) emit({ version: 1, type: "failure", message });
+      },
+      terrainReady,
+    );
+  }
   let state: BridgeSnapshot = { pins: [], scans: [], boundary: [] };
   let removePins = (): void => {
     /* no pins before the first snapshot */
@@ -139,10 +167,12 @@ try {
   const contextRestored = (): void => location.reload();
   viewer.canvas.addEventListener("webglcontextlost", contextLost);
   viewer.canvas.addEventListener("webglcontextrestored", contextRestored);
-  const heapPoll = window.setInterval(() => {
-    if (heapNearLimit((performance as Performance & { memory?: HeapUsage }).memory))
-      memoryWarning();
-  }, SCAN_DETAIL_CONFIG.embed.heapPollMs);
+  const heapPoll = window.hexUITestMode
+    ? undefined
+    : window.setInterval(() => {
+        if (heapNearLimit((performance as Performance & { memory?: HeapUsage }).memory))
+          memoryWarning();
+      }, SCAN_DETAIL_CONFIG.embed.heapPollMs);
   function selectScan(id: string): void {
     const scan = state.scans.find((s) => s.id === id);
     if (!scan) throw Error("Unknown scan");
@@ -163,7 +193,7 @@ try {
     if (tiles) {
       viewer.camera.flyToBoundingSphere(tiles.boundingSphere, {
         offset: new HeadingPitchRange(0, -0.7, scanRange(tiles.boundingSphere.radius)),
-        duration: 0.35,
+        duration: window.hexUITestMode ? 0 : 0.35,
       });
       return;
     }
@@ -171,7 +201,7 @@ try {
       new BoundingSphere(Cartesian3.fromDegrees(scan.geo.lon, scan.geo.lat, scan.geo.alt), 30),
       {
         offset: new HeadingPitchRange(0, -0.7, 120),
-        duration: 0.35,
+        duration: window.hexUITestMode ? 0 : 0.35,
       },
     );
   }
@@ -231,7 +261,7 @@ try {
               if (points.length)
                 viewer.camera.flyToBoundingSphere(BoundingSphere.fromPoints(points), {
                   offset: new HeadingPitchRange(0, -0.7, 0),
-                  duration: 0.35,
+                  duration: window.hexUITestMode ? 0 : 0.35,
                 });
             }
             viewer.scene.requestRender();

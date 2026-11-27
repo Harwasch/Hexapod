@@ -15,18 +15,28 @@
     WKNavigationDelegate
   {
     public static let shared = CesiumGlobeSession()
+    public static let uiTest = CesiumGlobeSession(uiTestMode: true)
     public let webView: WKWebView
     @Published public private(set) var error: String?
     private var origin: GlobeOrigin?
+    private let uiTestMode: Bool
     private var bridge = GlobeBridgeState()
     private var snapshot: GlobeSnapshot?
     private var owner: UUID?
     private var onPin: ((GlobePin) -> Void)?
     private var onScan: ((UUID) -> Void)?
 
-    public override init() {
+    public override convenience init() { self.init(uiTestMode: false) }
+    public init(uiTestMode: Bool) {
+      self.uiTestMode = uiTestMode
       let configuration = WKWebViewConfiguration()
       configuration.websiteDataStore = .nonPersistent()
+      if uiTestMode {
+        configuration.userContentController.addUserScript(
+          WKUserScript(
+            source: "window.hexUITestMode = true;", injectionTime: .atDocumentStart,
+            forMainFrameOnly: true))
+      }
       webView = WKWebView(frame: .zero, configuration: configuration)
       super.init()
       configuration.userContentController.add(WeakGlobeHandler(self), name: "globe")
@@ -44,11 +54,12 @@
     }
     deinit { NotificationCenter.default.removeObserver(self) }
     public func configure(webBaseURL: URL?, fixture: Bool) {
+      let useFixture = fixture || uiTestMode
       let local =
-        fixture
+        useFixture
         ? Bundle.module.url(
           forResource: "globe-embed", withExtension: "html", subdirectory: "GlobeWeb") : nil
-      guard !fixture || local != nil else {
+      guard !useFixture || local != nil else {
         error = "Globe fixture unavailable"
         return
       }
@@ -83,7 +94,7 @@
       self.onPin = onPin
       self.onScan = onScan
       for message in bridge.update(
-        snapshot: snapshot.bridgeSnapshot(fixture: fixture),
+        snapshot: snapshot.bridgeSnapshot(fixture: fixture || uiTestMode),
         scanID: scanID?.uuidString.lowercased())
       { send(message) }
     }
@@ -175,11 +186,13 @@
     let webBaseURL: URL?
     let onPin: (GlobePin) -> Void
     let onScan: (UUID) -> Void
-    @ObservedObject private var session = CesiumGlobeSession.shared
+    @ObservedObject private var session: CesiumGlobeSession
     public init(
       snapshot: GlobeSnapshot, scanID: UUID? = nil, fixture: Bool = false, webBaseURL: URL? = nil,
+      uiTestMode: Bool = false,
       onPin: @escaping (GlobePin) -> Void, onScan: @escaping (UUID) -> Void
     ) {
+      self.session = uiTestMode ? .uiTest : .shared
       self.snapshot = snapshot
       self.scanID = scanID
       self.fixture = fixture

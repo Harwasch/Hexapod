@@ -166,13 +166,44 @@ jobs:
           path: apps/ios/Modules/Globe/Sources/Globe/Resources/GlobeWeb
       - name: Test packages on an available iPhone simulator
         run: python3 apps/ios/ci_scripts/packages.py test
+      - name: Upload ios-test-logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-test-logs
+          path: apps/ios/build/test-logs
+          if-no-files-found: warn
+
+  ui-tests:
+    needs: app
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode 26 explicitly
+        run: |
+          xcode=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
+          sudo xcode-select --switch "$xcode/Contents/Developer"
+          xcodebuild -version
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            apps/ios/Modules/*/.build
+            apps/ios/App/.build
+          key: ${{ runner.os }}-xcode26-spm-${{ hashFiles('apps/ios/**/Package.swift', 'apps/ios/**/Package.resolved') }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: ios-globe-resources
+          path: apps/ios/Modules/Globe/Sources/Globe/Resources/GlobeWeb
       - name: Generate UI test project
         if: ${{ !cancelled() }}
         run: |
           brew install xcodegen
           cd apps/ios
           xcodegen generate
-      - name: UI tests with screenshots
+      - name: Boot simulator and run UI tests with screenshots
         if: ${{ !cancelled() }}
         run: python3 apps/ios/ci_scripts/ui_tests.py
       - name: Export UI screenshots
@@ -198,17 +229,10 @@ jobs:
             apps/ios/build/HexUITests.xcresult
             apps/ios/build/ui-tests.log
           if-no-files-found: warn
-      - name: Upload ios-test-logs
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios-test-logs
-          path: apps/ios/build/test-logs
-          if-no-files-found: warn
 
   testflight:
     if: ${{ inputs.testflight }}
-    needs: [packages, app, tests]
+    needs: [packages, app, tests, ui-tests]
     runs-on: macos-26
     timeout-minutes: 45
     steps:

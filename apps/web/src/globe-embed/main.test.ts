@@ -21,7 +21,7 @@ const hooks = vi.hoisted(() => ({
 }));
 vi.mock("cesium", async (original) => ({
   ...(await original<typeof Cesium>()),
-  ImageryLayer: { fromProviderAsync: vi.fn() },
+  ImageryLayer: vi.fn(),
   ScreenSpaceEventHandler: class {
     setInputAction(action: typeof hooks.click): void {
       hooks.click = action;
@@ -33,6 +33,9 @@ vi.mock("cesium", async (original) => ({
 }));
 vi.mock("@/cesium/createGlobeWidget", () => ({ createGlobeWidget: hooks.widget }));
 vi.mock("@/cesium/providers/tiles", () => ({ createEmbedScanTileset: hooks.load }));
+vi.mock("@/cesium/providers/imagery", () => ({
+  createNaturalEarthProvider: vi.fn(() => Promise.resolve({})),
+}));
 vi.mock("./basemap", () => ({
   installBasemap: vi.fn<typeof installBasemap>((_v, _token, _status, ready) => {
     ready?.();
@@ -42,14 +45,21 @@ vi.mock("./basemap", () => ({
 afterEach(() => {
   window.dispatchEvent(new Event("pagehide"));
   delete window.webkit;
+  delete window.hexUITestMode;
   sessionStorage.clear();
   vi.restoreAllMocks();
 });
-it.each([false, true])(
-  "boots with failed terrain=%s, shares pins, frames geometry and cleans up",
-  async (terrainFails) => {
+it.each([
+  [false, false],
+  [true, false],
+  [false, true],
+])(
+  "boots with failed terrain=%s, UI mode=%s, shares pins, frames geometry and cleans up",
+  async (terrainFails, uiTestMode) => {
     vi.resetModules();
     vi.clearAllMocks();
+    window.hexUITestMode = uiTestMode;
+    const intervals = vi.spyOn(window, "setInterval");
     document.body.innerHTML = '<div id="globe"></div><div id="credits"></div><p id="status"></p>';
     Object.defineProperty(window, "devicePixelRatio", { value: 3, configurable: true });
     const postMessage = vi.fn();
@@ -57,6 +67,7 @@ it.each([false, true])(
     const entities = new EntityCollection();
     const viewer = {
       entities,
+      clock: { shouldAnimate: true },
       terrainProvider: terrainFails
         ? ({} as Cesium.TerrainProvider)
         : new EllipsoidTerrainProvider(),
@@ -64,6 +75,8 @@ it.each([false, true])(
       canvas: document.createElement("canvas"),
       scene: {
         globe: {},
+        requestRenderMode: false,
+        maximumRenderTimeChange: 0,
         screenSpaceCameraController: { minimumZoomDistance: 1, enableCollisionDetection: true },
         preRender: new CesiumEvent(),
         postRender: new CesiumEvent(),
@@ -90,12 +103,20 @@ it.each([false, true])(
     expect(viewer.resolutionScale).toBe(3);
     expect(viewer.scene.screenSpaceCameraController.minimumZoomDistance).toBe(0.05);
     expect(postMessage).toHaveBeenCalledWith({ version: 1, type: "ready" });
-    vi.mocked(installBasemap).mock.calls[0]![2]("No imagery");
-    expect(postMessage).toHaveBeenCalledWith({
-      version: 1,
-      type: "failure",
-      message: "No imagery",
-    });
+    expect(viewer.clock.shouldAnimate).toBe(!uiTestMode);
+    if (uiTestMode) {
+      expect(viewer.scene.requestRenderMode).toBe(true);
+      expect(viewer.scene.maximumRenderTimeChange).toBe(Number.POSITIVE_INFINITY);
+      expect(installBasemap).not.toHaveBeenCalled();
+      expect(intervals).not.toHaveBeenCalled();
+    } else {
+      vi.mocked(installBasemap).mock.calls[0]![2]("No imagery");
+      expect(postMessage).toHaveBeenCalledWith({
+        version: 1,
+        type: "failure",
+        message: "No imagery",
+      });
+    }
     const bridge = window.globeBridge!;
     fixtures.slice(0, 3).forEach((fixture) => bridge.receive(fixture));
     if (!terrainFails) bridge.receive({ version: 1, type: "memoryWarning" });
@@ -139,7 +160,10 @@ it.each([false, true])(
     clock.mockRestore();
     expect(viewer.camera.flyToBoundingSphere).toHaveBeenCalledWith(
       tile.boundingSphere,
-      expect.objectContaining({ offset: new HeadingPitchRange(0, -0.7, 10) }),
+      expect.objectContaining({
+        offset: new HeadingPitchRange(0, -0.7, 10),
+        duration: uiTestMode ? 0 : 0.35,
+      }),
     );
     bridge.receive(fixtures[1]);
     expect(hooks.load).toHaveBeenCalledOnce();

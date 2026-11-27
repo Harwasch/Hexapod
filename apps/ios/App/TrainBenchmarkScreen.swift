@@ -25,7 +25,7 @@
             }
           } else {
             Button("Benchmark train", systemImage: "play.circle") { start() }
-              .buttonStyle(.borderedProminent)
+              .buttonStyle(.borderedProminent).disabled(LaunchMode.current.isUITest)
           }
           if let report {
             VStack(spacing: 12) {
@@ -52,6 +52,7 @@
     }
 
     private func start() {
+      guard !LaunchMode.current.isUITest else { return }
       running = true
       report = nil
       reportURL = nil

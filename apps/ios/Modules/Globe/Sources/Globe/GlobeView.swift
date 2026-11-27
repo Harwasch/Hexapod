@@ -26,20 +26,27 @@
     private var effectiveRoute: GlobeRoute? { route ?? selectedSite }
     @AppStorage("globeImplementation") private var implementation = GlobeImplementation.defaultValue
       .rawValue
+    private let uiTestMode: Bool
     private let fixture: Bool
     private let renderer: GlobeImplementation?
 
     public init(
       source: any GlobeDataSource, route: GlobeRoute? = nil, webBaseURL: URL? = nil,
-      onOpenScan: (@MainActor (GlobeRoute) -> Void)? = nil, fixture: Bool = false,
+      onOpenScan: (@MainActor (GlobeRoute) -> Void)? = nil, fixture: Bool = false, uiTestMode: Bool = false,
       renderer: GlobeImplementation? = nil
     ) {
+      self.uiTestMode = uiTestMode
       self.renderer = renderer
       self.fixture = fixture
       self.source = source
       self.route = route
       self.webBaseURL = webBaseURL
       self.onOpenScan = onOpenScan
+    }
+
+    private var usesAppleMaps: Bool {
+      let selected = renderer?.rawValue ?? implementation
+      return !uiTestMode && selected == GlobeImplementation.appleMaps.rawValue
     }
 
     public var body: some View {
@@ -56,7 +63,7 @@
           }
         } else if let snapshot {
           ZStack {
-            if (renderer?.rawValue ?? implementation) == GlobeImplementation.appleMaps.rawValue {
+            if usesAppleMaps {
               AppleMapsGlobeView(
                 snapshot: snapshot, selectedScan: selectedScan ?? effectiveRoute?.scanID,
                 onPin: { selectedPin = $0 }, onScan: { selectedScan = $0 }
@@ -65,7 +72,7 @@
             } else {
               CesiumGlobeView(
                 snapshot: snapshot, scanID: selectedScan ?? effectiveRoute?.scanID,
-                fixture: fixture, webBaseURL: webBaseURL,
+                fixture: fixture, webBaseURL: webBaseURL, uiTestMode: uiTestMode,
                 onPin: { selectedPin = $0 }, onScan: { selectedScan = $0 }
               )
               .ignoresSafeArea()
@@ -141,7 +148,10 @@
       }
       .navigationBarBackButtonHidden()
       .toolbar(.hidden, for: .navigationBar)
-      .task { CesiumGlobeSession.shared.configure(webBaseURL: webBaseURL, fixture: fixture) }
+      .task {
+        let session = uiTestMode ? CesiumGlobeSession.uiTest : CesiumGlobeSession.shared
+        session.configure(webBaseURL: webBaseURL, fixture: fixture)
+      }
       .task(id: LoadKey(route: effectiveRoute, retry: retry)) {
         failed = false
         scanPending = false
@@ -191,7 +201,8 @@
       } else if let target = snapshot?.captureRoute(for: scanID).scanID {
         selectedScan = target
         implementation = GlobeImplementation.cesium.rawValue
-        CesiumGlobeSession.shared.focus(scanID: target)
+        let session = uiTestMode ? CesiumGlobeSession.uiTest : CesiumGlobeSession.shared
+        session.focus(scanID: target)
       }
     }
     private struct LoadKey: Hashable {

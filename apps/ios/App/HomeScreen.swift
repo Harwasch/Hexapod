@@ -10,7 +10,6 @@ import Upload
 
 @MainActor struct HomeScreen: View {
   @State private var registry = PieceRegistry()
-  init() { UIFixtureLaunch.install() }
   var body: some View {
     NavigationStack { CameraHost(registry: registry) }
       .tint(HexStyle.amber)
@@ -19,21 +18,7 @@ import Upload
 }
 
 enum UIFixtureLaunch {
-  static var active: Bool {
-    #if DEBUG
-      let args = ProcessInfo.processInfo.arguments
-      return args.firstIndex(of: "-uiTestFixture").map {
-        args.indices.contains($0 + 1) && args[$0 + 1] == "yard-small"
-      } ?? false
-    #else
-      false
-    #endif
-  }
-  static func install() {
-    #if DEBUG
-      if active { _ = URLProtocol.registerClass(UIFixtureAPIProtocol.self) }
-    #endif
-  }
+  static var active: Bool { LaunchMode.current.usesFixtureProviders }
 }
 
 /// Shared with the hidden benchmark screen, so not file-private.
@@ -91,7 +76,7 @@ enum HexStyle {
       guard phase == .active else { return }
       while !Task.isCancelled {
         await reload()
-        if captures.contains(where: { $0.serverUnavailable }) { return }
+        if LaunchMode.current.isUITest || captures.contains(where: { $0.serverUnavailable }) { return }
         do { try await Task.sleep(for: .seconds(3)) } catch { return }
       }
     }
@@ -274,18 +259,19 @@ enum HexStyle {
           dismiss()
         } catch { deleteFailed = true }
       }
+      .accessibilityIdentifier("capture.confirmDelete")
       Button("Cancel", role: .cancel) {}
     } message: {
       Text("The uploaded copy stays on the server.")
     }
     .task(id: connectionRetry) {
-      player = AVPlayer(url: capture.video)
+      if !LaunchMode.current.isUITest { player = AVPlayer(url: capture.video) }
       capture.serverUnavailable = false
       while !Task.isCancelled {
         var updated = capture
         await updated.refresh(configuration: registry.configuration)
         capture = updated
-        if capture.serverUnavailable { return }
+        if LaunchMode.current.isUITest || capture.serverUnavailable { return }
         do { try await Task.sleep(for: .seconds(3)) } catch { return }
       }
     }
@@ -344,8 +330,7 @@ private struct CaptureRow: Identifiable, Sendable {
   var serverUnavailable = false
   var id: String { local.id }
   static var root: URL {
-    FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      .appendingPathComponent("Captures")
+    LaunchMode.current.captureRoot
   }
   init(_ local: LocalCapture) {
     self.local = local
@@ -409,6 +394,13 @@ private struct CaptureRow: Identifiable, Sendable {
     {
       local = LocalCapture(directory: local.directory, upload: upload)
     }
+    if let fixture = LaunchMode.current.captureAPI {
+      do {
+        remote = try await fixture.status(local)
+        serverUnavailable = false
+      } catch { serverUnavailable = true }
+      return
+    }
     guard let base = configuration.apiRoot,
       let id = local.upload?.captureID.flatMap(UUID.init(uuidString:)), local.upload?.uploadComplete == true
     else { return }
@@ -438,15 +430,14 @@ private struct CaptureRow: Identifiable, Sendable {
   }
   var body: some View {
     let choice =
-      UIFixtureLaunch.active ? "fake" : (debugChoices ? registry.choice("globe") : "real")
+      LaunchMode.current.isUITest ? "fake" : (debugChoices ? registry.choice("globe") : "real")
     Group {
       if let source = try? registry.globeSources.resolve(choice) {
         GlobeView(
-          source: UIFixtureLaunch.active
-            && ProcessInfo.processInfo.arguments.contains("-uiTestGlobeEmpty")
+          source: LaunchMode.current.emptyGlobe
             ? FakeGlobeDataSource(includeScans: false) : source,
           route: route, webBaseURL: registry.configuration.webBaseURL,
-          fixture: choice == "fake"
+          fixture: choice == "fake", uiTestMode: LaunchMode.current.isUITest
         )
         .overlay(alignment: .bottomLeading) {
           if choice == "fake" {
@@ -469,6 +460,7 @@ private struct CaptureRow: Identifiable, Sendable {
 }
 
 @MainActor struct SettingsScreen: View {
+  @Environment(\.dismiss) private var dismiss
   let registry: PieceRegistry
   @State private var token = ""
   @State private var saved = false
@@ -537,6 +529,15 @@ private struct CaptureRow: Identifiable, Sendable {
     }
     .scrollContentBackground(.hidden).background(HexStyle.background)
     .navigationTitle("Settings").accessibilityIdentifier("settings.screen")
+    .navigationBarBackButtonHidden(LaunchMode.current.isUITest)
+    .toolbar {
+      if LaunchMode.current.isUITest {
+        ToolbarItem(placement: .topBarLeading) {
+          Button("Back", systemImage: "chevron.left") { dismiss() }
+            .accessibilityIdentifier("settings.back")
+        }
+      }
+    }
     .toolbar(.visible, for: .navigationBar)
     .onAppear { token = APICredentials.writeToken }
     .onChange(of: token) { _, _ in saved = false }

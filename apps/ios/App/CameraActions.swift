@@ -65,6 +65,7 @@ import Voice
   let simulated: Bool
   let liveSplat: (any LiveSplatRenderer)?
   private var replayTask: Task<Void, Never>?
+  private var previewTask: Task<Void, Never>?
   var usesLiveCapture: Bool { captureSource.usesLiveSession }
   var canRecord: Bool { usesLiveCapture || (simulated && captureSource.fixtureDirectory != nil) }
   struct ScreenPin: Identifiable {
@@ -73,7 +74,15 @@ import Voice
     let y: CGFloat
   }
   private(set) var screenPins: [ScreenPin] = []
+  private(set) var previewGeneration = 0
+  var previewSize: CGSize = .zero
   private func updatePins() {
+    if LaunchMode.current.isUITest && simulated {
+      screenPins = presentation.entities.indices.map {
+        ScreenPin(id: $0, x: previewSize.width / 2, y: previewSize.height * 0.55)
+      }
+      return
+    }
     guard let view = arView else {
       screenPins = []
       return
@@ -156,7 +165,8 @@ import Voice
         liveSplat?.start()
         installPreview()
       case .stopping:
-        captureDuration = Date().timeIntervalSince(recordingStarted ?? Date())
+        captureDuration = LaunchMode.current.date().timeIntervalSince(
+          recordingStarted ?? LaunchMode.current.date())
         liveSplat?.stop()
         arView?.renderCallbacks.postProcess = nil
         (overlay as? RealityAnswerOverlay)?.setScanning(false)
@@ -183,6 +193,7 @@ import Voice
   }
 
   func attach(_ view: ARView) {
+    guard !LaunchMode.current.isUITest else { return }
     arView = view
     cameraReady = true
     overlay?.remove()
@@ -216,6 +227,13 @@ import Voice
     failed = false
   }
 
+  func beginUITestPreview(size: CGSize) {
+    previewSize = size
+    guard LaunchMode.current.isUITest, !usesLiveCapture else { return }
+    overlay = FakeOverlaySink()
+    beginReplay()
+  }
+
   func beginReplay() {
     guard !usesLiveCapture, replayTask == nil else { return }
     replayTask = Task { [weak self] in
@@ -229,6 +247,7 @@ import Voice
           let entities = try await perception.inspect(.init(subject: "subject", tools: [.count]))
           overlay?.update(entities: entities)
           highlight(await perception.selection())
+          if LaunchMode.current.isUITest { break }
         }
       } catch is CancellationError {} catch { failed = true }
     }
@@ -251,6 +270,7 @@ import Voice
 
   /// Called by a 10 Hz UI timer, never from the ARSession delegate.
   func tick() {
+    guard !LaunchMode.current.isUITest else { return }
     recorder.pollFailure()
     let level = recording && usesLiveCapture ? frameFeed.camera.motionLevel : .steady
     if level != motionLevel { motionLevel = level }
@@ -302,6 +322,7 @@ import Voice
 
   /// Lightweight camera uniforms only. Surface rasterization happens on the GPU each display frame.
   func displayTick() {
+    guard !LaunchMode.current.isUITest else { return }
     guard let view = arView, let driver = perceptionDriver else { return }
     driver.setViewport(
       size: view.bounds.size,
@@ -375,7 +396,9 @@ import Voice
     if case .stopping = capturePhase { return }
     if case .starting = capturePhase { return }
     failed = false
-    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    if !LaunchMode.current.isUITest {
+      UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    }
     if !recording {
       clearAnswer()
     }
@@ -387,11 +410,11 @@ import Voice
     if recording {
       recording = false
       capturePhase = .stopping
-      captureDuration = Date().timeIntervalSince(recordingStarted ?? Date())
+      captureDuration = LaunchMode.current.date().timeIntervalSince(
+        recordingStarted ?? LaunchMode.current.date())
+      previewTask?.cancel()
       liveSplat?.stop()
-      let destination = FileManager.default.urls(
-        for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("Captures/" + UUID().uuidString)
+      let destination = LaunchMode.current.captureRoot.appendingPathComponent(UUID().uuidString)
       let details = CaptureDetails(siteName: siteName, siteID: siteID, duration: captureDuration)
       Task {
         do {
@@ -408,11 +431,31 @@ import Voice
       }
     } else if !capturePhase.isBusy {
       clearAnswer()
-      let start = Date()
+      let start = LaunchMode.current.date()
       recordingStarted = start
       capturePhase = .recording(start)
       recording = true
+      previewGeneration = 0
       liveSplat?.start()
+      if LaunchMode.current.isUITest { seedStaticPreview() }
+    }
+  }
+
+  private func seedStaticPreview() {
+    guard let directory = LaunchMode.current.previewDirectory, let renderer = liveSplat else { return }
+    previewTask?.cancel()
+    previewTask = Task {
+      do {
+        try await FixtureSplatPreview.seed(renderer: renderer, directory: directory)
+        try Task.checkCancellation()
+        if let reference = renderer as? DefaultLiveSplatRenderer {
+          scanGuidance = FixtureSplatPreview.guidance(renderer: reference)
+        }
+        previewGeneration += 1
+      } catch is CancellationError {} catch {
+        failed = true
+        failureText = "Fixture preview unavailable"
+      }
     }
   }
 
@@ -606,6 +649,8 @@ import Voice
   }
 
   func suspend() {
+    previewTask?.cancel()
+    previewTask = nil
     perceptionDriver?.resetSelection(enabled: false)
     frameFeed.setPerceptionDriver(nil)
     let stoppedDriver = perceptionDriver

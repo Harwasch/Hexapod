@@ -26,6 +26,13 @@ import Upload
       issues[id] = "Sign in"
       return
     }
+    if let fixture = LaunchMode.current.captureAPI {
+      do {
+        states[id] = try await fixture.store(capture, siteName: siteName, siteID: siteID)
+        issues[id] = nil
+      } catch { issues[id] = "Retry upload" }
+      return
+    }
     guard let api = config.apiRoot else {
       issues[id] = "API unavailable"
       return
@@ -83,13 +90,16 @@ import Upload
   }
 
   func resumeQueued() async {
-    let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      .appendingPathComponent("Captures")
+    let root = LaunchMode.current.captureRoot
     let captures = (try? await Task.detached { try LocalCapture.list(at: root) }.value) ?? []
     for capture in captures { await enqueue(capture) }
   }
 
   func refineInCloud(_ capture: LocalCapture) async throws {
+    if let fixture = LaunchMode.current.captureAPI {
+      states[capture.id] = try await fixture.refine(capture)
+      return
+    }
     let config = ServiceConfiguration(defaults: .standard)
     guard let base = config.apiRoot else { throw UploadError.invalidURL }
     let uploader: BundleUploader
@@ -110,8 +120,11 @@ import Upload
   }
 
   func reconnect(identifier: String, completion: @escaping @MainActor @Sendable () -> Void) async {
-    let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-      .appendingPathComponent("Captures")
+    if LaunchMode.current.isUITest {
+      completion()
+      return
+    }
+    let root = LaunchMode.current.captureRoot
     let captures = (try? await Task.detached { try LocalCapture.list(at: root) }.value) ?? []
     for capture in captures {
       guard let state = capture.upload,

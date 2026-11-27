@@ -21,6 +21,11 @@ struct LiveCaptureSource: CameraCaptureSource {
 }
 struct FixtureCaptureSource: CameraCaptureSource {
   let directory: URL
+  let singleFrame: Bool
+  init(directory: URL, singleFrame: Bool = false) {
+    self.directory = directory
+    self.singleFrame = singleFrame
+  }
   var fixtureDirectory: URL? { directory }
   let usesLiveSession = false
   func frames() -> AsyncThrowingStream<FrameSnapshot, Error> {
@@ -31,6 +36,7 @@ struct FixtureCaptureSource: CameraCaptureSource {
           for frame in replay.frames where frame.trackingState == "normal" {
             try Task.checkCancellation()
             c.yield(try replay.snapshot(at: frame.index))
+            if singleFrame { break }
             try await Task.sleep(for: .milliseconds(83))
           }
           c.finish()
@@ -185,17 +191,18 @@ enum ProviderError: Error, CustomStringConvertible {
   func makeCamera(useTestChoices: Bool = false) throws -> CameraProviders {
     #if DEBUG
       // UI automation is an explicit DEBUG launch; this path is absent from Release.
-      if let index = ProcessInfo.processInfo.arguments.firstIndex(of: "-uiTestFixture"),
-        ProcessInfo.processInfo.arguments.indices.contains(index + 1),
-        ProcessInfo.processInfo.arguments[index + 1] == "yard-small",
-        let directory = Bundle.main.url(
+      if LaunchMode.current.usesFixtureProviders {
+        guard let directory = Bundle.main.url(
           forResource: "yard-small", withExtension: nil,
           subdirectory: "UITestFixtures")
-      {
+        else { throw ProviderError.fixtureNotSelected }
         return CameraProviders(
           voice: FakeVoice(), planner: RulePlanner(), perception: FakePerception(),
-          liveSplat: try splatRenderers.resolve("fake"), deep: try FakeDeepAnswering.yardSmall(),
-          capture: FixtureCaptureSource(directory: directory), fakeOverlay: true, simulated: true)
+          liveSplat: DefaultLiveSplatRenderer(
+            preference: LiveSplatPreference(store: DebugSplatPreferenceStore())),
+          deep: try FakeDeepAnswering.yardSmall(),
+          capture: FixtureCaptureSource(directory: directory, singleFrame: true),
+          fakeOverlay: true, simulated: true)
       }
     #endif
     // Stored TestFlight choices must not leak into a later App Store launch or
