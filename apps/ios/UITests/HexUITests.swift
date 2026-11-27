@@ -59,7 +59,13 @@ import XCTest
     file: StaticString = #filePath, line: UInt = #line) {
     visible(id, file: file, line: line)
     let element = app.descendants(matching: .any)[id].firstMatch
-    XCTAssertTrue(element.isHittable, "Not hittable: \(id)", file: file, line: line)
+    let ready = NSPredicate(format: "exists == true AND hittable == true AND enabled == true")
+    let readiness = XCTNSPredicateExpectation(predicate: ready, object: element)
+    let outcome = XCTWaiter.wait(for: [readiness], timeout: 20)
+    guard outcome == .completed else {
+      XCTFail("Not ready to tap: \(id)", file: file, line: line)
+      return
+    }
     element.tap()
     screenshot(shot)
   }
