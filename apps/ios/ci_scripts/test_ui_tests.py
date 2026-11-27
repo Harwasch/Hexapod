@@ -83,6 +83,31 @@ class UITestWorkflowTests(unittest.TestCase):
         self.assertIn('rm -rf "$fixture_dir"', script)
         self.assertIn('UITestFixtures', script)
 
+    def test_screen_identifiers_preserve_child_controls(self):
+        # Run 22 rendered the controls, but SwiftUI propagated camera.screen to
+        # every descendant. Declaration-only identifier audits cannot catch that.
+        for filename, identifiers in {
+            'CameraScreen.swift': ['camera.screen'],
+            'HomeScreen.swift': ['capture.detail', 'globe.screen', 'settings.screen'],
+        }.items():
+            source = (ROOT / 'apps/ios/App' / filename).read_text()
+            for identifier in identifiers:
+                with self.subTest(identifier=identifier):
+                    pattern = (r'\.accessibilityElement\(children: \.contain\)\s*'
+                               r'\.accessibilityIdentifier\("' + re.escape(identifier) + r'"\)')
+                    self.assertIsNotNone(re.search(pattern, source),
+                                         f'{filename}: {identifier} needs its own container')
+
+    def test_fixture_preview_task_has_content_before_image_loads(self):
+        source = (ROOT / 'apps/ios/App/CameraScreen.swift').read_text()
+        preview = source.split('@ViewBuilder private var cameraSurface:', 1)[1]
+        preview = preview.split('if model.recording,', 1)[0]
+        # A task on Group { if let image { ... } } has no view to attach to
+        # initially. It must run before the image or the first replay frame exists.
+        self.assertRegex(preview, r'ZStack\s*\{\s*CameraStyle\.background\s+if let fixtureBackground')
+        self.assertIn('.task(id: scenePhase)', preview)
+        self.assertIn('model.beginUITestPreview(size: geometry.size)', preview)
+
     def test_ui_identifiers_resolve_to_app_accessibility_identifiers(self):
         ios = ROOT / 'apps/ios'
         tests = (ios / 'UITests/HexUITests.swift').read_text()

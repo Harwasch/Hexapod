@@ -160,6 +160,8 @@ private enum CameraStyle {
       }
     }
     .foregroundStyle(CameraStyle.text)
+    // Give the screen its own AX container instead of overriding every control's ID.
+    .accessibilityElement(children: .contain)
     .accessibilityIdentifier("camera.screen")
     .toolbar(.hidden, for: .navigationBar)
     .sheet(isPresented: $showSites) { CameraSitePicker(model: model) }
@@ -179,7 +181,9 @@ private enum CameraStyle {
   @ViewBuilder private var cameraSurface: some View {
     if LaunchMode.current.isUITest {
       GeometryReader { geometry in
-        Group {
+        // Keep a concrete task host before the asynchronously loaded image exists.
+        ZStack {
+          CameraStyle.background
           if let fixtureBackground {
             Image(uiImage: fixtureBackground).resizable().scaledToFill()
           }
