@@ -11,7 +11,7 @@
 
   /// Sole owner of a session and step loop. msplat's global runtime actor executes
   /// all native calls, off MainActor. One PhoneTrainer may be running process-wide.
-  /// A future Make 3D screen consumes progress(), setActive(), pause()/resume() and
+  /// The product screen consumes progress(), setActive(), pause()/resume() and
   /// exportPLY(); it must forward scene inactivity immediately. No background work.
   public actor PhoneTrainer {
     private let dataset: PreparedDataset
@@ -28,6 +28,18 @@
     private var samples: [TrainSample] = []
     private var continuations: [UUID: AsyncStream<TrainProgress>.Continuation] = [:]
     private var lastPSNR: Float?
+    private var previewPose: CameraPose?
+    private var previewObservers: [UUID: AsyncStream<MetalPreviewSurface>.Continuation] = [:]
+
+    public func setPreviewPose(_ pose: CameraPose) { previewPose = pose }
+    public func previews() -> AsyncStream<MetalPreviewSurface> {
+      let id = UUID()
+      let (stream, continuation) = AsyncStream<MetalPreviewSurface>.makeStream(bufferingPolicy: .bufferingNewest(1))
+      previewObservers[id] = continuation
+      continuation.onTermination = { [weak self] _ in Task { await self?.removePreview(id) } }
+      return stream
+    }
+    private func removePreview(_ id: UUID) { previewObservers.removeValue(forKey: id) }
 
     public init(
       dataset: PreparedDataset, capture: URL, outputDirectory: URL,
@@ -72,7 +84,19 @@
         continuation.yield(TrainProgress(sample: sample, message: message, psnr: lastPSNR))
       }
     }
-    public func setActive(_ value: Bool) { control.active = value }
+    public func setActive(_ value: Bool) async {
+      control.active = value
+      // A final-step evaluation/export can leave the loop idle. Preserve that
+      // completed optimizer state on inactivity as well as at loop boundaries.
+      if !value, !running, !auxiliaryBusy, !closed, let session {
+        auxiliaryBusy = true
+        try? await checkpoint(session)
+        auxiliaryBusy = false
+      }
+    }
+    public func needsCooling() -> Bool {
+      control.criticalObserved || ProcessInfo.processInfo.thermalState == .critical
+    }
     public func pause() { control.manuallyPaused = true }
     public func resume() {
       control.manuallyPaused = false
@@ -194,7 +218,7 @@
           }
         }
         guard let session else { throw PrepError.invalid("No session") }
-        let initialStep = try await session.iteration
+        var etaEstimator = TrainingETA()
         var checkpointedPause = false
         while try await session.iteration < Int(config.iterations) {
           try Task.checkCancellation()
@@ -219,6 +243,7 @@
             continue
           }
           checkpointedPause = false
+          let activeStepStart = ProcessInfo.processInfo.systemUptime
           if thermal == .serious {
             try await Task.sleep(for: .milliseconds(config.seriousSleepMilliseconds))
             // Sleep is a reentrancy point: check lifecycle before submitting again.
@@ -249,10 +274,8 @@
           // full of mixed-type arithmetic is what times out Xcode's type checker.
           let now: Double = ProcessInfo.processInfo.systemUptime
           let elapsed: Double = now - start
-          let stepsDone: Int = max(1, submitted.iteration - initialStep)
           let stepsLeft: Int = Int(config.iterations) - submitted.iteration
-          let secondsPerStep: Double = elapsed / Double(stepsDone)
-          let eta: Double = secondsPerStep * Double(stepsLeft)
+          let eta: Double = etaEstimator.record(stepSeconds: now - activeStepStart, remaining: stepsLeft)
           var loss: Float? = nil
           if let value = completed.loss, value.isFinite { loss = value }
           var footprint: UInt64? = ProcessMemory.physicalFootprint()
@@ -266,6 +289,26 @@
             physicalFootprint: footprint, availableMemory: availableNow, thermalState: thermalNow)
           samples.append(sample)
           emit("Training", sample: sample)
+          // Product consumers request poses, never native work. The completed-step
+          // boundary serializes preview/evaluation with optimization and checkpoints.
+          let previewRequested = previewPose != nil
+          let thermalBoundary = control.criticalObserved ? 3 : ProcessInfo.processInfo.thermalState.rawValue
+          if TrainingSnapshotPolicy.preview(step: submitted.iteration, requested: previewRequested,
+            active: control.active, paused: control.manuallyPaused,
+            cancelled: control.cancelled, thermal: thermalBoundary), let pose = previewPose {
+            let submission = try await session.submitPreview(pose: pose)
+            let surface = try await submission.waitUntilReady()
+            for observer in previewObservers.values { observer.yield(surface) }
+          }
+          // Preview completion is a reentrancy point: check lifecycle again.
+          let evaluationThermal = control.criticalObserved ? 3 : ProcessInfo.processInfo.thermalState.rawValue
+          if TrainingSnapshotPolicy.evaluate(step: submitted.iteration, requested: previewRequested,
+            active: control.active, paused: control.manuallyPaused,
+            cancelled: control.cancelled, thermal: evaluationThermal) {
+            let evaluation = try await session.evaluate()
+            if evaluation.psnr.isFinite { lastPSNR = evaluation.psnr }
+            emit("Training", sample: sample)
+          }
         }
         // Final-step thermal/lifecycle checks precede evaluation/export too.
         if control.decision(thermal: ProcessInfo.processInfo.thermalState.rawValue) == .critical {
@@ -316,17 +359,15 @@
     }
 
     public func evaluate() async throws -> EvalMetrics {
-      guard !running, !auxiliaryBusy, !closed, control.active, !control.criticalObserved,
-        let session,
-        ProcessInfo.processInfo.thermalState != .critical
-      else { throw PrepError.invalid("Evaluation unavailable") }
-      auxiliaryBusy = true
+      let session = try await acquireAuxiliary()
       defer { auxiliaryBusy = false }
+      try await waitForAuxiliaryBoundary(session)
       let metrics = try await session.evaluate()
       if control.criticalObserved || ProcessInfo.processInfo.thermalState == .critical {
         try await checkpoint(session)
         throw PrepError.invalid("Critical temperature during evaluation; checkpoint saved")
       }
+      if !control.active { try await checkpoint(session) }
       lastPSNR = metrics.psnr
       emit("Evaluation complete: PSNR \(metrics.psnr), SSIM \(metrics.ssim)")
       return metrics
@@ -335,15 +376,42 @@
     /// PLY remains in ARKit world metres (keepCrs=true). MsplatSession v3.0.0
     /// has no public SPZ export; do not mix in deprecated GaussianTrainer handles.
     public func exportPLY() async throws -> URL {
-      guard !running, !auxiliaryBusy, !closed, control.active, !control.criticalObserved,
-        let session,
-        ProcessInfo.processInfo.thermalState != .critical
-      else { throw PrepError.invalid("Export unavailable") }
-      auxiliaryBusy = true
+      let session = try await acquireAuxiliary()
       defer { auxiliaryBusy = false }
+      try await waitForAuxiliaryBoundary(session)
       let url = output.appendingPathComponent("trained.ply")
       try await session.exportPLY(to: url)
+      if !control.active { try await checkpoint(session) }
       return url
+    }
+
+    private func acquireAuxiliary() async throws -> MsplatSession {
+      while auxiliaryBusy {
+        try Task.checkCancellation()
+        try await Task.sleep(for: .milliseconds(10))
+      }
+      guard !running, !closed, let session else { throw PrepError.invalid("Session unavailable") }
+      auxiliaryBusy = true
+      return session
+    }
+
+    /// Uses the same portable control decisions as the training loop. It keeps
+    /// auxiliary ownership while waiting, so no second evaluator can enter.
+    private func waitForAuxiliaryBoundary(_ session: MsplatSession) async throws {
+      var checkpointed = false
+      while true {
+        let decision = control.decision(thermal: ProcessInfo.processInfo.thermalState.rawValue)
+        switch decision {
+        case .cancel: throw CancellationError()
+        case .critical:
+          try await checkpoint(session)
+          throw PrepError.invalid("Cooling required; checkpoint saved")
+        case .pause:
+          if !checkpointed { try await checkpoint(session); checkpointed = true }
+          try await Task.sleep(for: .milliseconds(100))
+        case .step, .throttle: return
+        }
+      }
     }
 
     /// Later live-forming preview seam: no texture or session escapes ownership.
@@ -360,7 +428,8 @@
     }
 
     public func close() async throws {
-      guard !running, !auxiliaryBusy else {
+      while auxiliaryBusy { try await Task.sleep(for: .milliseconds(10)) }
+      guard !running else {
         throw PrepError.invalid("Cancel and await operations before close")
       }
       if let thermalObserver { NotificationCenter.default.removeObserver(thermalObserver) }
@@ -369,6 +438,8 @@
       defer {
         for c in continuations.values { c.finish() }
         continuations.removeAll()
+        for observer in previewObservers.values { observer.finish() }
+        previewObservers.removeAll()
       }
       let previous = session
       session = nil
