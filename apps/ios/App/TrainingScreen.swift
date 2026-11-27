@@ -114,6 +114,7 @@
         if LaunchMode.current.isUITest { Task { await refreshCloud() } }
       }
       .onChange(of: model.experience.stage) { _, stage in
+        camera?.setTrainingBusy(stage.busy, capture: model.capture.directory)
         if LaunchMode.current.isUITest, stage == .result { Task { await refreshCloud() } }
       }
       .onChange(of: phase) { _, value in
@@ -131,7 +132,10 @@
         camera?.showTrainedSplat(nil)
         cloudController?.onReady = nil
         cloudController?.webView.stopLoading()
-        Task { await model.stop() }
+        Task {
+          await model.stop()
+          camera?.setTrainingBusy(false, capture: model.capture.directory)
+        }
       }
       .sheet(isPresented: $showSettings) {
         if let registry { NavigationStack { SettingsScreen(registry: registry) } }

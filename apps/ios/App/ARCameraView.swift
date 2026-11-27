@@ -54,10 +54,10 @@
         }
         return
       }
-      coordinator.active = isActive && Self.supportsDevice
+      coordinator.active = isActive && Self.supportsDevice && model.keepsCameraSession
       guard coordinator.active else {
         coordinator.stop()
-        if isActive { model.reportUnavailable() }
+        if isActive && model.keepsCameraSession { model.reportUnavailable() }
         return
       }
       coordinator.startIfNeeded()
@@ -193,6 +193,7 @@
     private var preview: ScanPreviewProcessor?
     private var trainedPreview: SavedSplatRenderer?
     private var perceptionDriver: CameraPerceptionDriver?
+    private var trainingBusy = false
     private var eventHandler: (@Sendable (Event) -> Void)?
     var onEvent: (@Sendable (Event) -> Void)? {
       get { lock.withLock { eventHandler } }
@@ -218,8 +219,12 @@
     func setPerceptionDriver(_ driver: CameraPerceptionDriver?) {
       lock.withLock { perceptionDriver = driver }
     }
+    func setTrainingBusy(_ busy: Bool) {
+      lock.withLock { trainingBusy = busy }
+    }
     var camera: CaptureCamera { ingress.camera }
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
+      guard !lock.withLock({ trainingBusy }) else { return }
       ingress.camera.observe(frame)
       ingress.offer(frame)
       let consumers = lock.withLock { (preview, perceptionDriver, trainedPreview) }

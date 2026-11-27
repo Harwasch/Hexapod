@@ -106,7 +106,26 @@ import simd
   }
   private weak var arView: ARView?
   private var splatWorld = SplatWorldOrigin()
-  func invalidateSplatOrigin() { splatWorld.invalidate() }
+  private(set) var trainingBusy = false
+  private var trainingNeedsInPlace = false
+  var keepsCameraSession: Bool {
+    TrainingCameraPolicy.keepSession(trainingBusy: trainingBusy, needsInPlace: trainingNeedsInPlace)
+  }
+  private var perceptionEnabled: Bool {
+    TrainingCameraPolicy.perceptionEnabled(trainingBusy: trainingBusy,
+      captureBusy: capturePhase.isBusy, talking: isTalking, answering: answering)
+  }
+  func setTrainingBusy(_ busy: Bool, capture: URL) {
+    if busy && !trainingBusy { trainingNeedsInPlace = canPlaceSplat(capture: capture) }
+    trainingBusy = busy
+    frameFeed.setTrainingBusy(busy)
+    perceptionDriver?.setEnabled(perceptionEnabled)
+    if !busy { trainingNeedsInPlace = false }
+  }
+  func invalidateSplatOrigin() {
+    splatWorld.invalidate()
+    trainingNeedsInPlace = false
+  }
   func canPlaceSplat(capture: URL) -> Bool {
     guard !LaunchMode.current.isUITest, usesLiveCapture, cameraReady, let view = arView, view.session.currentFrame != nil else { return false }
     return splatWorld.permits(capture: capture, session: ObjectIdentifier(view.session))
@@ -152,7 +171,7 @@ import simd
     }
   }
   var perceptionPerformance: String {
-    if capturePhase.isBusy || isTalking || answering { return "Vision paused" }
+    if !perceptionEnabled { return "Vision paused" }
     return String(
       format: "Vision %.1f Hz · %.0f ms · target ≥%.0f Hz",
       perceptionMetrics.achievedHz, perceptionMetrics.averageDurationMilliseconds,
@@ -233,7 +252,7 @@ import simd
         let driver =
           perceptionDriver ?? CameraPerceptionDriver(scene: perception, renderer: renderer)
         driver.setRenderer(renderer)
-        driver.setEnabled(true)
+        driver.setEnabled(perceptionEnabled)
         return driver
       })
     overlay = attachment.overlay
@@ -300,12 +319,12 @@ import simd
     let level = recording && usesLiveCapture ? frameFeed.camera.motionLevel : .steady
     if level != motionLevel { motionLevel = level }
     if let driver = perceptionDriver {
-      let enabled = !capturePhase.isBusy && !isTalking && !answering
+      let enabled = perceptionEnabled
       driver.setEnabled(enabled)
       if enabled { (overlay as? RealityAnswerOverlay)?.enableWorldHighlight() }
       perceptionMetrics = driver.metrics
       for event in driver.takeTapEvents() { receiveTap(event, log: false) }
-      if let result = driver.takeResult(), driver.isCurrent(result.generation), !capturePhase.isBusy
+      if let result = driver.takeResult(), driver.isCurrent(result.generation), perceptionEnabled
       {
         if tapSelectionActive {
           presentation.replaceSelection(result.selection.entities)
@@ -347,7 +366,7 @@ import simd
 
   /// Lightweight camera uniforms only. Surface rasterization happens on the GPU each display frame.
   func displayTick() {
-    guard !LaunchMode.current.isUITest else { return }
+    guard !LaunchMode.current.isUITest, !trainingBusy else { return }
     guard let view = arView, let driver = perceptionDriver else { return }
     driver.setViewport(
       size: view.bounds.size,
@@ -356,7 +375,7 @@ import simd
   }
 
   func tap(_ point: CGPoint) {
-    guard !capturePhase.isBusy else {
+    guard !capturePhase.isBusy, !trainingBusy else {
       receiveTap(.refused(.disabled))
       return
     }
@@ -379,7 +398,7 @@ import simd
     let router = router
     Task { await router.cancel() }
     if let driver = perceptionDriver {
-      driver.setEnabled(true)
+      driver.setEnabled(perceptionEnabled)
       let outcome = driver.select(
         ImagePoint(
           x: Double(point.x / view.bounds.width),
@@ -510,7 +529,7 @@ import simd
     let router = router
     let perception = perception
     let driver = perceptionDriver
-    driver?.resetSelection(enabled: !capturePhase.isBusy && !isTalking && !answering)
+    driver?.resetSelection(enabled: perceptionEnabled)
     Task {
       await router.cancel()
       if driver == nil { await perception.clear() }
