@@ -15,6 +15,14 @@ struct LocalCapture: Identifiable, Sendable {
     else { return nil }
     return try? JSONDecoder().decode(CaptureDetails.self, from: data)
   }
+  var isSimulated: Bool {
+    struct Identity: Decodable { let device: String }
+    guard let data = try? Data(contentsOf: directory.appendingPathComponent("manifest.json")),
+      let identity = try? JSONDecoder().decode(Identity.self, from: data) else { return false }
+    return identity.device.hasPrefix("Simulated")
+  }
+  var cloudSplat: CloudSplatRecord? { CloudSplatRecord.load(for: self) }
+  var phoneSplat: PhoneSplatRecord? { PhoneSplatRecord.load(for: self) }
   var uploadDirectory: URL {
     directory.deletingLastPathComponent().deletingLastPathComponent()
       .appendingPathComponent("Uploads/\(id)")

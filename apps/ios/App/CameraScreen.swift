@@ -23,6 +23,8 @@ private enum CameraStyle {
   @State private var model: CameraModel
   @State private var isPressing = false
   @State private var showSites = false
+  @State private var trainCapture: LocalCapture?
+  private let registry: PieceRegistry?
   @AppStorage("hex.testflight.debugEnabled") private var testFlightDebug = false
   @State private var latestThumbnail: UIImage?
   @State private var fixtureBackground: UIImage?
@@ -31,10 +33,11 @@ private enum CameraStyle {
   private let onGlobe: (() -> Void)?
 
   init(
-    model: CameraModel, onCaptures: (() -> Void)? = nil,
+    model: CameraModel, registry: PieceRegistry? = nil, onCaptures: (() -> Void)? = nil,
     onSettings: (() -> Void)? = nil, onGlobe: (() -> Void)? = nil
   ) {
     _model = State(initialValue: model)
+    self.registry = registry
     self.onCaptures = onCaptures
     self.onSettings = onSettings
     self.onGlobe = onGlobe
@@ -58,7 +61,7 @@ private enum CameraStyle {
       LinearGradient(
         colors: [.clear, .black.opacity(0.65)], startPoint: .center, endPoint: .bottom
       )
-      .ignoresSafeArea().allowsHitTesting(false)
+      .ignoresSafeArea().allowsHitTesting(false).opacity(trainCapture == nil ? 1 : 0)
       GeometryReader { _ in
         ForEach(model.screenPins) { pin in
           Button {
@@ -74,7 +77,7 @@ private enum CameraStyle {
             .accessibilityIdentifier("answer.pin.\(pin.id + 1)")
             .position(x: pin.x, y: pin.y)
         }
-      }.ignoresSafeArea()
+      }.ignoresSafeArea().opacity(trainCapture == nil ? 1 : 0).allowsHitTesting(trainCapture == nil)
       CameraTimeline { date in
         GeometryReader { geometry in
           VStack {
@@ -140,11 +143,20 @@ private enum CameraStyle {
 
         }
       }
-      if let directory = model.savedCapture {
+      .opacity(trainCapture == nil ? 1 : 0).allowsHitTesting(trainCapture == nil)
+      if let directory = model.savedCapture, trainCapture == nil {
         CaptureUploadScreen(
           capture: LocalCapture(directory: directory, upload: nil),
           siteName: model.siteName, siteID: model.siteID, duration: model.captureDuration,
+          train: { trainCapture = LocalCapture(directory: directory, upload: nil) },
           onSettings: onSettings, onSite: { showSites = true }, done: model.dismissCapture)
+      }
+    }
+    .overlay {
+      if let trainCapture {
+        TrainingScreen(capture: trainCapture, registry: registry, camera: model) {
+          self.trainCapture = nil
+        }
       }
     }
     .foregroundStyle(CameraStyle.text)
@@ -417,6 +429,7 @@ private struct ProgressRing: View {
   let siteName: String?
   let siteID: UUID?
   let duration: TimeInterval
+  let train: () -> Void
   let onSettings: (() -> Void)?
   let onSite: () -> Void
   let done: () -> Void
@@ -483,6 +496,12 @@ private struct ProgressRing: View {
           }
           Spacer(minLength: 0)
         }
+        Button(action: train) {
+          Label("Train on phone", systemImage: "sparkles")
+            .font(.headline).frame(maxWidth: .infinity).frame(height: 56)
+            .background(CameraStyle.teal, in: RoundedRectangle(cornerRadius: 14))
+            .foregroundStyle(CameraStyle.background)
+        }.accessibilityIdentifier(TrainingID.start)
         Button(action: done) {
           Text("Done").font(.system(size: 16, weight: .semibold)).foregroundStyle(
             CameraStyle.background

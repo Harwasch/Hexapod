@@ -54,10 +54,10 @@
         }
         return
       }
-      coordinator.active = isActive && Self.supportsDevice
+      coordinator.active = isActive && Self.supportsDevice && model.keepsCameraSession
       guard coordinator.active else {
         coordinator.stop()
-        if isActive { model.reportUnavailable() }
+        if isActive && model.keepsCameraSession { model.reportUnavailable() }
         return
       }
       coordinator.startIfNeeded()
@@ -66,6 +66,7 @@
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
     static func dismantleUIView(_ view: ARView, coordinator: Coordinator) {
       coordinator.active = false
+      coordinator.model.invalidateSplatOrigin()
       coordinator.stop()
       view.session.delegate = nil
     }
@@ -91,12 +92,14 @@
             guard let self else { return }
             switch event {
             case .interrupted:
+              self.model.invalidateSplatOrigin()
               self.interrupted = true
               self.stop()
             case .resumed:
               self.interrupted = false
               self.startIfNeeded()
             case .failed:
+              self.model.invalidateSplatOrigin()
               self.active = false
               self.stop()
               self.model.reportUnavailable()
@@ -157,6 +160,7 @@
       }
       /// The first frames showed 4K without matching depth: run the default format instead.
       func restartWithoutFourK() {
+        model.invalidateSplatOrigin()
         guard running, let view else { return }
         view.session.run(configuration(fourK: false), options: [.resetTracking])
       }
@@ -187,7 +191,9 @@
     private let ingress: ScanIngress
     private let lock = NSLock()
     private var preview: ScanPreviewProcessor?
+    private var trainedPreview: SavedSplatRenderer?
     private var perceptionDriver: CameraPerceptionDriver?
+    private var trainingBusy = false
     private var eventHandler: (@Sendable (Event) -> Void)?
     var onEvent: (@Sendable (Event) -> Void)? {
       get { lock.withLock { eventHandler } }
@@ -199,16 +205,32 @@
         preview = processor
       }
     }
+    func setTrainedPreview(_ processor: SavedSplatRenderer?) {
+      let previous = lock.withLock {
+        let previous = trainedPreview
+        trainedPreview = processor
+        return previous
+      }
+      if previous !== processor {
+        previous?.setLiveCamera(false)
+        processor?.setLiveCamera(true)
+      }
+    }
     func setPerceptionDriver(_ driver: CameraPerceptionDriver?) {
       lock.withLock { perceptionDriver = driver }
     }
+    func setTrainingBusy(_ busy: Bool) {
+      lock.withLock { trainingBusy = busy }
+    }
     var camera: CaptureCamera { ingress.camera }
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
+      guard !lock.withLock({ trainingBusy }) else { return }
       ingress.camera.observe(frame)
       ingress.offer(frame)
-      let consumers = lock.withLock { (preview, perceptionDriver) }
+      let consumers = lock.withLock { (preview, perceptionDriver, trainedPreview) }
       consumers.0?.offer(frame)
       consumers.1?.offer(frame)
+      consumers.2?.offer(frame)
     }
     func sessionWasInterrupted(_ session: ARSession) {
       ingress.stop()

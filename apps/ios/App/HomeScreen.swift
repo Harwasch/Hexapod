@@ -59,12 +59,27 @@ enum HexStyle {
                 Text(capture.subtitle).font(.system(size: 12, design: .monospaced))
                   .foregroundStyle(HexStyle.muted)
               }.frame(maxWidth: .infinity, alignment: .leading)
-              CaptureStatusPill(label: capture.status)
+              VStack(spacing: 8) {
+                CaptureQualityBadge(quality: CaptureQuality(phone: capture.local.phoneSplat != nil,
+                  cloud: capture.remote?.status == "complete" || capture.local.cloudSplat != nil))
+                CaptureStatusPill(label: capture.status)
+              }
             }
             .padding(12).background(HexStyle.panel, in: RoundedRectangle(cornerRadius: 18))
           }
           .buttonStyle(.plain)
+          .accessibilityElement(children: .contain)
           .accessibilityIdentifier("capture.row.\(capture.id)")
+          .contextMenu {
+            if let record = capture.local.phoneSplat {
+              ShareLink(item: record.url(for: capture.local)) { Label("Phone PLY", systemImage: "iphone") }
+                .accessibilityIdentifier(TrainingID.share)
+            }
+            if let url = capture.local.cloudSplat?.shareURL(webBaseURL: registry.configuration.webBaseURL) {
+              ShareLink(item: url) { Label("Cloud scan", systemImage: "cloud") }
+                .accessibilityIdentifier(TrainingID.shareCloud)
+            }
+          }
         }
       }.padding(20)
     }
@@ -105,6 +120,22 @@ enum HexStyle {
   }
 }
 
+private struct CaptureQualityBadge: View {
+  let quality: CaptureQuality
+  var body: some View {
+    HStack(spacing: 6) {
+      if quality.phone {
+        Image(systemName: "iphone").accessibilityLabel("Phone splat")
+          .accessibilityIdentifier(TrainingID.phoneBadge)
+      }
+      if quality.cloud {
+        Image(systemName: "cloud.fill").accessibilityLabel("Cloud splat")
+          .accessibilityIdentifier(TrainingID.cloudBadge)
+      }
+    }.font(.system(size: 12)).foregroundStyle(HexStyle.teal)
+  }
+}
+
 @MainActor private struct CapturePageHeader: View {
   @Environment(\.dismiss) private var dismiss
   var body: some View {
@@ -129,6 +160,7 @@ enum HexStyle {
   @State private var player: AVPlayer?
   @State private var deleteConfirmation = false
   @State private var refineConfirmation = false
+  @State private var training = false
   @State private var refining = false
   @State private var refineFailed = false
   @State private var deleteFailed = false
@@ -153,6 +185,11 @@ enum HexStyle {
           CaptureThumbnail(video: capture.video).frame(height: 300)
             .clipShape(RoundedRectangle(cornerRadius: 18))
         }
+        Button { training = true } label: {
+          Label(capture.local.phoneSplat == nil ? "Train on phone" : "View splat", systemImage: "sparkles")
+            .font(.headline).frame(maxWidth: .infinity).frame(height: 56)
+        }.buttonStyle(.borderedProminent).tint(HexStyle.teal)
+          .accessibilityIdentifier(TrainingID.start)
         Text(capture.name).font(.title2.weight(.semibold))
         Text(capture.subtitle).font(.system(.caption, design: .monospaced))
           .foregroundStyle(HexStyle.muted)
@@ -209,8 +246,14 @@ enum HexStyle {
             }.frame(minHeight: 44).disabled(capture.uploadActive)
           }
         }
+        if let url = capture.local.cloudSplat?.shareURL(webBaseURL: registry.configuration.webBaseURL) {
+          ShareLink(item: url) { Label("Share cloud scan", systemImage: "cloud") }
+            .frame(minHeight: 48).accessibilityIdentifier(TrainingID.shareCloud)
+        }
         HStack(spacing: 32) {
-          ShareLink(item: capture.video) { Label("Share", systemImage: "square.and.arrow.up") }
+          ShareLink(item: capture.video) {
+            Label("Share", systemImage: "square.and.arrow.up")
+          }
             .frame(minHeight: 44).accessibilityIdentifier("capture.share")
           Button(role: .destructive) {
             deleteConfirmation = true
@@ -226,6 +269,9 @@ enum HexStyle {
     .navigationTitle("Scan").navigationBarTitleDisplayMode(.inline)
     .toolbar(.visible, for: .navigationBar)
     .accessibilityIdentifier("capture.detail")
+    .fullScreenCover(isPresented: $training) {
+      TrainingScreen(capture: capture.local, registry: registry) { training = false }
+    }
     .confirmationDialog(
       "Refine in cloud?", isPresented: $refineConfirmation, titleVisibility: .visible
     ) {
@@ -241,8 +287,8 @@ enum HexStyle {
           } catch { refineFailed = true }
           refining = false
         }
-      }
-      Button("Cancel", role: .cancel) {}
+      }.accessibilityIdentifier(TrainingID.confirm)
+      Button("Cancel", role: .cancel) {}.accessibilityIdentifier(TrainingID.decline)
     } message: {
       Text("Estimated cost: \(CaptureStatus.cloudRefineEstimatedCost) per scan. Your upload is already stored.")
     }
@@ -255,6 +301,8 @@ enum HexStyle {
           if FileManager.default.fileExists(atPath: capture.local.uploadDirectory.path) {
             try FileManager.default.removeItem(at: capture.local.uploadDirectory)
           }
+          let results = PhoneSplatRecord.directory(for: capture.local)
+          if FileManager.default.fileExists(atPath: results.path) { try FileManager.default.removeItem(at: results) }
           try FileManager.default.removeItem(at: capture.local.directory)
           dismiss()
         } catch { deleteFailed = true }
@@ -394,18 +442,12 @@ private struct CaptureRow: Identifiable, Sendable {
     {
       local = LocalCapture(directory: local.directory, upload: upload)
     }
-    if let fixture = LaunchMode.current.captureAPI {
-      do {
-        remote = try await fixture.status(local)
-        serverUnavailable = false
-      } catch { serverUnavailable = true }
-      return
-    }
-    guard let base = configuration.apiRoot,
-      let id = local.upload?.captureID.flatMap(UUID.init(uuidString:)), local.upload?.uploadComplete == true
-    else { return }
     do {
-      remote = try await CatalogCaptureState.fetch(captureID: id, baseURL: base)
+      guard let fetched = try await CaptureStatus.fetch(local, configuration: configuration) else { return }
+      remote = fetched
+      if let route, let scanID = route.scanID {
+        try? CloudSplatRecord(siteID: route.siteID, scanID: scanID).saveIfChanged(for: local)
+      }
       serverUnavailable = false
     } catch { if !Task.isCancelled { serverUnavailable = true } }
   }

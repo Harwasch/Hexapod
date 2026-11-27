@@ -10,6 +10,7 @@ import RealityKit
 import Router
 import UIKit
 import Voice
+import simd
 
 @MainActor protocol RecordingControl: AnyObject {
   var isRecording: Bool { get }
@@ -104,6 +105,46 @@ import Voice
     card = presentation.entities[index]
   }
   private weak var arView: ARView?
+  private var splatWorld = SplatWorldOrigin()
+  private(set) var trainingBusy = false
+  private var trainingNeedsInPlace = false
+  var keepsCameraSession: Bool {
+    TrainingCameraPolicy.keepSession(trainingBusy: trainingBusy, needsInPlace: trainingNeedsInPlace)
+  }
+  private var perceptionEnabled: Bool {
+    TrainingCameraPolicy.perceptionEnabled(trainingBusy: trainingBusy,
+      captureBusy: capturePhase.isBusy, talking: isTalking, answering: answering)
+  }
+  func setTrainingBusy(_ busy: Bool, capture: URL) {
+    if busy && !trainingBusy { trainingNeedsInPlace = canPlaceSplat(capture: capture) }
+    trainingBusy = busy
+    frameFeed.setTrainingBusy(busy)
+    perceptionDriver?.setEnabled(perceptionEnabled)
+    if !busy { trainingNeedsInPlace = false }
+  }
+  func invalidateSplatOrigin() {
+    splatWorld.invalidate()
+    trainingNeedsInPlace = false
+  }
+  func canPlaceSplat(capture: URL) -> Bool {
+    guard !LaunchMode.current.isUITest, usesLiveCapture, cameraReady, let view = arView, view.session.currentFrame != nil else { return false }
+    return splatWorld.permits(capture: capture, session: ObjectIdentifier(view.session))
+  }
+  func trainedSplatCamera(capture: URL) -> (view: simd_float4x4, projection: simd_float4x4, size: CGSize)? {
+    guard canPlaceSplat(capture: capture), let view = arView,
+      let frame = view.session.currentFrame else { return nil }
+    let orientation = view.window?.windowScene?.interfaceOrientation ?? .portrait
+    return (frame.camera.viewMatrix(for: orientation),
+      frame.camera.projectionMatrix(for: orientation, viewportSize: view.bounds.size, zNear: 0.02, zFar: 100), view.bounds.size)
+  }
+  func showTrainedSplat(_ renderer: SavedSplatRenderer?) {
+    guard let view = arView else { frameFeed.setTrainedPreview(nil); return }
+    renderer?.setViewport(view.bounds.size)
+    frameFeed.setTrainedPreview(renderer)
+    if let renderer {
+      view.renderCallbacks.postProcess = { @Sendable context in renderer.composite(context) }
+    } else { view.renderCallbacks.postProcess = nil }
+  }
   private var voiceTask: Task<Void, Never>?
   private var answerTask: Task<Void, Never>?
   private var questionGeneration = UUID()
@@ -130,7 +171,7 @@ import Voice
     }
   }
   var perceptionPerformance: String {
-    if capturePhase.isBusy || isTalking || answering { return "Vision paused" }
+    if !perceptionEnabled { return "Vision paused" }
     return String(
       format: "Vision %.1f Hz · %.0f ms · target ≥%.0f Hz",
       perceptionMetrics.achievedHz, perceptionMetrics.averageDurationMilliseconds,
@@ -172,6 +213,9 @@ import Voice
         (overlay as? RealityAnswerOverlay)?.setScanning(false)
       case .saved(let directory):
         savedCapture = directory
+        if usesLiveCapture, cameraReady, let view = arView {
+          splatWorld.record(capture: directory, session: ObjectIdentifier(view.session))
+        } else { splatWorld.invalidate() }
         latestCapture = directory
       case .failed:
         failureText = "Scan failed"
@@ -208,7 +252,7 @@ import Voice
         let driver =
           perceptionDriver ?? CameraPerceptionDriver(scene: perception, renderer: renderer)
         driver.setRenderer(renderer)
-        driver.setEnabled(true)
+        driver.setEnabled(perceptionEnabled)
         return driver
       })
     overlay = attachment.overlay
@@ -275,12 +319,12 @@ import Voice
     let level = recording && usesLiveCapture ? frameFeed.camera.motionLevel : .steady
     if level != motionLevel { motionLevel = level }
     if let driver = perceptionDriver {
-      let enabled = !capturePhase.isBusy && !isTalking && !answering
+      let enabled = perceptionEnabled
       driver.setEnabled(enabled)
       if enabled { (overlay as? RealityAnswerOverlay)?.enableWorldHighlight() }
       perceptionMetrics = driver.metrics
       for event in driver.takeTapEvents() { receiveTap(event, log: false) }
-      if let result = driver.takeResult(), driver.isCurrent(result.generation), !capturePhase.isBusy
+      if let result = driver.takeResult(), driver.isCurrent(result.generation), perceptionEnabled
       {
         if tapSelectionActive {
           presentation.replaceSelection(result.selection.entities)
@@ -322,7 +366,7 @@ import Voice
 
   /// Lightweight camera uniforms only. Surface rasterization happens on the GPU each display frame.
   func displayTick() {
-    guard !LaunchMode.current.isUITest else { return }
+    guard !LaunchMode.current.isUITest, !trainingBusy else { return }
     guard let view = arView, let driver = perceptionDriver else { return }
     driver.setViewport(
       size: view.bounds.size,
@@ -331,7 +375,7 @@ import Voice
   }
 
   func tap(_ point: CGPoint) {
-    guard !capturePhase.isBusy else {
+    guard !capturePhase.isBusy, !trainingBusy else {
       receiveTap(.refused(.disabled))
       return
     }
@@ -354,7 +398,7 @@ import Voice
     let router = router
     Task { await router.cancel() }
     if let driver = perceptionDriver {
-      driver.setEnabled(true)
+      driver.setEnabled(perceptionEnabled)
       let outcome = driver.select(
         ImagePoint(
           x: Double(point.x / view.bounds.width),
@@ -485,7 +529,7 @@ import Voice
     let router = router
     let perception = perception
     let driver = perceptionDriver
-    driver?.resetSelection(enabled: !capturePhase.isBusy && !isTalking && !answering)
+    driver?.resetSelection(enabled: perceptionEnabled)
     Task {
       await router.cancel()
       if driver == nil { await perception.clear() }
@@ -651,6 +695,7 @@ import Voice
   func suspend() {
     previewTask?.cancel()
     previewTask = nil
+    frameFeed.setTrainedPreview(nil)
     perceptionDriver?.resetSelection(enabled: false)
     frameFeed.setPerceptionDriver(nil)
     let stoppedDriver = perceptionDriver

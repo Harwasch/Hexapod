@@ -299,3 +299,11 @@ Foundation/Swift. The package's remote dependency is conditional on a macOS host
 Linux package tests remain entirely local. Apple-only code is guarded by
 `canImport(Msplat)` and relevant Apple frameworks. There is no claim that Linux
 success type-checks SwiftUI, AVFoundation, Darwin or the binary framework.
+
+## Build B compile self-audit
+
+The complete new/changed Apple-only file list, actor/Metal ownership checks and
+pinned SDK symbol locations are in [BUILD_B_REPORT.md](../BUILD_B_REPORT.md).
+All changed Apple Swift files received an iOS-target syntax parse and a source
+self-audit against the brief. Linux does not type-check Apple SDK code or compile
+Metal; no Mac build or device rendering result is claimed.

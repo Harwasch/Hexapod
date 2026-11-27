@@ -22,8 +22,19 @@ public struct PhoneTrainingResult: Equatable, Sendable {
 }
 
 #if canImport(Msplat) && os(iOS)
+  import Msplat
+
+  /// Optional native capability. Portable/fixture sessions need only the original
+  /// PhoneTrainingSession contract and may supply a PNG instead of Metal surfaces.
+  public protocol PhoneTrainingNativePreview: PhoneTrainingSession {
+    func setPreviewPose(_ pose: CameraPose) async
+    func previews() async -> AsyncStream<MetalPreviewSurface>
+    func evaluatePSNR() async throws -> Float?
+    func needsCooling() async -> Bool
+  }
+
   /// Delegates lifecycle and training to the real actor; no native behavior is overridden.
-  public struct DevicePhoneTrainingSession: PhoneTrainingSession {
+  public struct DevicePhoneTrainingSession: PhoneTrainingNativePreview {
     public let trainer: PhoneTrainer
     public init(trainer: PhoneTrainer) { self.trainer = trainer }
     public func progress() async -> AsyncStream<TrainProgress> { await trainer.progress() }
@@ -41,7 +52,13 @@ public struct PhoneTrainingResult: Equatable, Sendable {
       case .critical: throw PrepError.invalid("Training paused: critical temperature")
       }
     }
-    // Native preview consumers continue to await trainer.submitPreview(...).waitUntilReady().
+    public func setPreviewPose(_ pose: CameraPose) async { await trainer.setPreviewPose(pose) }
+    public func previews() async -> AsyncStream<MetalPreviewSurface> { await trainer.previews() }
+    public func evaluatePSNR() async throws -> Float? {
+      let metrics = try await trainer.evaluate()
+      return metrics.psnr
+    }
+    public func needsCooling() async -> Bool { await trainer.needsCooling() }
     public func previewImage() async throws -> Data? { nil }
     public func closeAndCleanup() async throws { try await trainer.closeAndCleanup() }
   }

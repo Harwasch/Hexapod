@@ -4,6 +4,16 @@ import Upload
 
 /// Upload bytes describe transfer only; reconstruction always comes from the server.
 enum CaptureStatus {
+  /// Route UI-test catalog reads through the same in-process API as upload/refine.
+  static func fetch(_ capture: LocalCapture, configuration: ServiceConfiguration,
+    fixture: (any FixtureCaptureServing)? = LaunchMode.current.captureAPI
+  ) async throws -> CatalogCaptureState? {
+    if let fixture { return try await fixture.status(capture) }
+    guard let base = configuration.apiRoot, capture.upload?.uploadComplete == true,
+      let id = capture.upload?.captureID.flatMap(UUID.init(uuidString:)) else { return nil }
+    return try await CatalogCaptureState.fetch(captureID: id, baseURL: base)
+  }
+
   /// Display estimate per scan, not a quote; keep confirmation copy sourced here.
   static let cloudRefineEstimatedCost = "$1-3"
 

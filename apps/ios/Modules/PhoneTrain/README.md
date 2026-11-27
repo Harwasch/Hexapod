@@ -1,7 +1,7 @@
-# Phone training, Build A
+# Phone training
 
-This package measures saved-capture Gaussian training on an iPhone. It adds no
-post-scan training screen. `PhoneTrainPrep` uses Foundation only; `PhoneTrain`
+This package trains saved captures on an iPhone and retains the hidden measurement
+workflow. Build B adds its product screen in `App/TrainingScreen.swift`. `PhoneTrainPrep` uses Foundation only; `PhoneTrain`
 contains the Apple adapter and actor. Linux never resolves a remote dependency.
 Apple hosts resolve Apache-2.0 msplat-ios **exactly 3.0.0**, product `Msplat`, with
 its binary XCFramework and bundled metallibs. No dependency source is vendored.
@@ -88,10 +88,16 @@ Outputs live in `Application Support/PhoneTrain/<capture-id>/<run>/`, beside the
 `exportPLY()` preserves ARKit world metres with `keepCrs = true`. Session v3.0.0
 has no public SPZ export. The deprecated `GaussianTrainer.exportSpz` belongs to a
 different ownership API and is deliberately not mixed into a session.
-`submitPreview(pose:referenceCamera:)` is the later live-forming preview seam;
-a consumer can await the returned submission's `waitUntilReady()` and display
-its owned surface. The result-viewer seam is the exported PLY URL. Neither screen
-is implemented here. Native sessions are process-global: no other msplat owner
+For the product, set an orbit with `setPreviewPose(_:)` and consume `previews()`.
+The loop submits a native Metal preview every 40 completed steps and evaluates
+held-out PSNR every 250 steps when a pose has been requested. Preview completion
+is awaited before another step; no auxiliary GPU operation races optimization.
+The hidden benchmark requests no pose and gets no extra preview/evaluation work.
+The independent `submitPreview(pose:referenceCamera:)` seam remains idle-only.
+`TrainingSnapshotPolicy` and active-step `TrainingETA` are portable and tested.
+Final evaluation/export obey the same pause, cancellation and critical-temperature
+policy; inactivity also checkpoints an idle completed session.
+The saved result seam is the exported PLY URL. Native sessions are process-global: no other msplat owner
 may train concurrently.
 
 ## Hidden benchmark and reports
@@ -188,3 +194,11 @@ pause/resume, native checkpoint reload after terminating/relaunching, cancellati
 cache eviction/rebuild, Files visibility and sharing. Compare reports from a cool
 phone and a warmed phone. Linux excludes Apple code and establishes none of the
 GPU timing, duration, quality or thermal targets.
+
+## Build B product
+
+The post-scan card and capture detail open the dark full-screen training flow.
+Sharpness, UI identifiers, durable result manifests and cloud intent live in the
+portable App support target. The saved PLY viewer and in-place rendering live in
+LiveSplat. See [Build B implementation and acceptance](../../BUILD_B_REPORT.md)
+for the full SDK inventory, assumptions and compile self-audit.

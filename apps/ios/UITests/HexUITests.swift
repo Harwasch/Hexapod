@@ -59,7 +59,13 @@ import XCTest
     file: StaticString = #filePath, line: UInt = #line) {
     visible(id, file: file, line: line)
     let element = app.descendants(matching: .any)[id].firstMatch
-    XCTAssertTrue(element.isHittable, "Not hittable: \(id)", file: file, line: line)
+    let ready = NSPredicate(format: "exists == true AND hittable == true AND enabled == true")
+    let readiness = XCTNSPredicateExpectation(predicate: ready, object: element)
+    let outcome = XCTWaiter.wait(for: [readiness], timeout: 20)
+    guard outcome == .completed else {
+      XCTFail("Not ready to tap: \(id)", file: file, line: line)
+      return
+    }
     element.tap()
     screenshot(shot)
   }
@@ -83,7 +89,7 @@ import XCTest
     screenshot("Upload")
     tap("upload.done", shot: "Done")
     tap("home.captures", shot: "Captures")
-    let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "capture.row.")).firstMatch
+    let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "capture.row.")).firstMatch
     XCTAssertTrue(row.waitForExistence(timeout: 20))
     screenshot("Capture list")
     row.tap()
@@ -95,6 +101,53 @@ import XCTest
     tap("capture.confirmDelete", shot: "Local scan deleted")
     visible("captures.back")
     screenshot("Local fixture removed")
+  }
+
+  func testPhoneTrainingRefinesThroughTheFixtureAPIAndPersists() {
+    launchFixture()
+    tap("home.record", shot: "Training scan started")
+    tap("scan.stop", shot: "Training scan saved")
+    visible("upload.complete")
+    tap("train.start", shot: "Training presets")
+    tap("train.quick", shot: "Quick selected")
+    tap("train.begin", shot: "Training started")
+    visible("result.share")
+    visible("result.orbit")
+    XCTAssertTrue(app.staticTexts["Simulated"].exists)
+    XCTAssertFalse(app.descendants(matching: .any)["inplace.open"].exists)
+    let status = app.descendants(matching: .any)["refine.progress"].firstMatch
+    visible("refine.progress")
+    XCTAssertTrue(status.label.contains("Stored in cloud"))
+    screenshot("Phone result")
+    tap("refine.start", shot: "Refine cost confirmation")
+    tap("refine.cancel", shot: "Refinement declined")
+    XCTAssertTrue(status.label.contains("Stored in cloud"))
+    tap("refine.start", shot: "Refine confirmed cost")
+    tap("refine.confirm", shot: "Refinement requested")
+    let ready = NSPredicate(format: "label CONTAINS %@", "Ready")
+    expectation(for: ready, evaluatedWith: status)
+    waitForExpectations(timeout: 20)
+    XCTAssertTrue(app.buttons["result.cloud"].isSelected)
+    screenshot("Cloud ready")
+    tap("result.phone", shot: "Phone fallback")
+    tap("result.close", shot: "Result closed")
+    tap("upload.done", shot: "Capture finished")
+    tap("home.captures", shot: "Trained capture list")
+    visible("captures.badge.phone")
+    visible("captures.badge.cloud")
+    screenshot("Both quality badges")
+    app.terminate()
+    launch("yard-small", resetCaptures: false)
+    tap("home.captures", shot: "Saved training after relaunch")
+    visible("captures.badge.phone")
+    let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "capture.row.")).firstMatch
+    XCTAssertTrue(row.waitForExistence(timeout: 20))
+    row.tap()
+    tap("train.start", shot: "Saved phone result opened")
+    visible("result.share")
+    visible("result.orbit")
+    XCTAssertFalse(app.descendants(matching: .any)["inplace.open"].exists)
+    screenshot("Saved simulated result")
   }
 
   func testGlobeSelectsAnotherScan() {

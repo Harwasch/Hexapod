@@ -89,9 +89,15 @@ class UITestWorkflowTests(unittest.TestCase):
         sources = list((ios / 'App').rglob('*.swift'))
         sources += list((ios / 'Modules').glob('*/Sources/**/*.swift'))
         declared = []
+        contract = (ios / 'App/Support/TrainingExperience.swift').read_text()
+        constants = dict(re.findall(r'static let (\w+) = "([^"]+)"', contract))
         for path in sources:
             source = path.read_text()
             # Include both arms of the two identifier ternaries in CameraScreen.
+            # Build B keeps its public identifier constants in a portable enum.
+            for name in re.findall(r'\bTrainingID\.(\w+)', source):
+                if name in constants:
+                    declared.append(re.escape(constants[name]))
             for expression in re.findall(r'\.accessibilityIdentifier\(([^\n]*(?:\n\s*"[^\n]*)?)', source):
                 for identifier in re.findall(r'"([^"]+)"', expression):
                     literal = identifier.split('\\(', 1)[0]
@@ -100,7 +106,7 @@ class UITestWorkflowTests(unittest.TestCase):
                         pattern += '.*'
                     declared.append(pattern)
         used = set(re.findall(
-            r'"((?:home|scan|fixture|splat|upload|capture|captures|globe|ask|answer|entity|settings)\.[^"\\]+)"',
+            r'"((?:home|scan|fixture|splat|upload|capture|captures|globe|ask|answer|entity|settings|train|result|inplace|refine)\.[^"\\]+)"',
             tests,
         ))
         self.assertGreater(len(used), 25)
@@ -111,3 +117,7 @@ class UITestWorkflowTests(unittest.TestCase):
                     self.assertTrue(any(p.startswith(re.escape(identifier)) for p in declared))
                 else:
                     self.assertTrue(any(re.fullmatch(p, identifier) for p in declared), identifier)
+
+
+if __name__ == '__main__':
+    unittest.main()

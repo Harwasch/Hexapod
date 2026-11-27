@@ -14,6 +14,7 @@ public struct PhoneTrainingConfig: Codable, Sendable, Equatable {
   public var ssimWeight: Float
   public var seriousSleepMilliseconds: UInt64
   public var memoryBudgetFraction: Double
+  // TODO-tune-from-benchmark: all Quick/Best product defaults live in this block.
   public static let quick = Self(
     iterations: 1_500, maxGaussians: 300_000, shDegree: 1,
     numDownscales: 1, resolutionSchedule: 750, warmupLength: 100, gpuStepTimeoutSeconds: 60,
@@ -88,4 +89,31 @@ public struct TrainingCheckpoint: Codable, Sendable {
   public let prep: PrepConfig
   public let training: PhoneTrainingConfig
   public let step: Int
+}
+
+/// Optional product-only work, performed after a GPU step has completed. Hidden
+/// benchmark callers never request a pose and retain their original workload.
+public enum TrainingSnapshotPolicy {
+  public static func preview(step: Int, requested: Bool, active: Bool, paused: Bool,
+    cancelled: Bool, thermal: Int) -> Bool {
+    requested && active && !paused && !cancelled && thermal < 3 && step > 0 && step % 40 == 0
+  }
+  public static func evaluate(step: Int, requested: Bool, active: Bool, paused: Bool,
+    cancelled: Bool, thermal: Int) -> Bool {
+    requested && active && !paused && !cancelled && thermal < 3 && step > 0 && step % 250 == 0
+  }
+}
+
+/// ETA uses completed active step time; pauses and preview/evaluation work do not
+/// inflate it. Extra preview work can make the displayed estimate optimistic.
+public struct TrainingETA: Sendable {
+  private var seconds = 0.0
+  private var samples = 0
+  public init() {}
+  public mutating func record(stepSeconds: Double, remaining: Int) -> Double {
+    guard stepSeconds.isFinite, stepSeconds >= 0 else { return 0 }
+    seconds += stepSeconds
+    samples += 1
+    return seconds / Double(samples) * Double(max(0, remaining))
+  }
 }
