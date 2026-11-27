@@ -117,3 +117,7 @@ class UITestWorkflowTests(unittest.TestCase):
                     self.assertTrue(any(p.startswith(re.escape(identifier)) for p in declared))
                 else:
                     self.assertTrue(any(re.fullmatch(p, identifier) for p in declared), identifier)
+
+
+if __name__ == '__main__':
+    unittest.main()
