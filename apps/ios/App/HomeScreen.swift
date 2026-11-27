@@ -446,7 +446,7 @@ private struct CaptureRow: Identifiable, Sendable {
       guard let fetched = try await CaptureStatus.fetch(local, configuration: configuration) else { return }
       remote = fetched
       if let route, let scanID = route.scanID {
-        try? CloudSplatRecord(siteID: route.siteID, scanID: scanID).save(for: local)
+        try? CloudSplatRecord(siteID: route.siteID, scanID: scanID).saveIfChanged(for: local)
       }
       serverUnavailable = false
     } catch { if !Task.isCancelled { serverUnavailable = true } }

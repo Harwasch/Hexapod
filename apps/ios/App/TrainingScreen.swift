@@ -109,7 +109,7 @@
       }
       .preferredColorScheme(.dark).foregroundStyle(HexStyle.text)
       .background(model.inPlace ? Color.clear : HexStyle.background)
-      .task { await pollCloud() }
+      .task(id: model.experience.stage) { await pollCloud() }
       .onChange(of: queue.states[model.capture.id]) { _, _ in
         if LaunchMode.current.isUITest { Task { await refreshCloud() } }
       }
@@ -385,19 +385,27 @@
     }
     private func refine() async {
       refining = true; refineFailed = false
+      remote = nil
       do { try await queue.requestRefinement(model.capture) }
       catch { refineFailed = true }
       refining = false
       await refreshCloud()
     }
+    private var cloudPollDecision: TrainingCloudPolicy.Decision {
+      let failed = remote?.label.hasPrefix("Failed") == true
+      return TrainingCloudPolicy.decision(busy: model.experience.stage.busy,
+        status: remote?.status, failed: failed)
+    }
     private func pollCloud() async {
       while !Task.isCancelled {
-        await refreshCloud()
-        if LaunchMode.current.isUITest { return }
+        if cloudPollDecision == .stop { await openCloudIfReady(); return }
+        if cloudPollDecision == .fetch { await refreshCloud() }
+        if LaunchMode.current.isUITest || cloudPollDecision == .stop { return }
         do { try await Task.sleep(for: .seconds(3)) } catch { return }
       }
     }
     private func refreshCloud() async {
+      guard cloudPollDecision == .fetch else { await openCloudIfReady(); return }
       await queue.refresh(model.capture)
       let upload = queue.states[model.capture.id] ?? model.capture.upload
       let local = LocalCapture(directory: model.capture.directory, upload: upload)
@@ -407,32 +415,38 @@
           cloudLabel = CaptureStatus.label(upload: upload, remote: remote, unavailable: false)
           return
         }
+        guard !Task.isCancelled, !model.experience.stage.busy else { return }
         remote = fetched
         cloudLabel = CaptureStatus.label(upload: upload, remote: fetched, unavailable: false)
         guard let route = CaptureStatus.trainedRoute(upload: upload, remote: fetched) else { return }
         cloudRoute = route
         if let scanID = route.scanID {
-          try? CloudSplatRecord(siteID: route.siteID, scanID: scanID).save(for: model.capture)
+          try? CloudSplatRecord(siteID: route.siteID, scanID: scanID).saveIfChanged(for: model.capture)
         }
-        if LaunchMode.current.isUITest {
-          fixtureCloudReady = true
-          if isResult { selection.cloudReady() }
-          return
-        }
-        // Published 3D Tiles use the existing renderer; native Phone remains mounted.
-        if isResult, cloudController == nil, registry != nil {
-          let controller = TrainingCloudController(route: route, configuration: configuration)
-          controller.onReady = {
-            model.inPlace = false
-            withAnimation {
-              if selection.cloudAvailable { selection.select(.cloud) }
-              else { selection.cloudReady() }
-            }
-          }
-          cloudController = controller
-          await controller.load()
-        }
+        await openCloudIfReady()
       } catch { cloudLabel = "Connection paused" }
+    }
+    private func openCloudIfReady() async {
+      guard !model.experience.stage.busy, let route = cloudRoute else { return }
+      if LaunchMode.current.isUITest {
+        fixtureCloudReady = true
+        if isResult { selection.cloudReady() }
+        return
+      }
+      let configuration = ServiceConfiguration(defaults: .standard)
+      // Published 3D Tiles use the existing renderer; native Phone remains mounted.
+      if isResult, cloudController == nil, registry != nil {
+        let controller = TrainingCloudController(route: route, configuration: configuration)
+        controller.onReady = {
+          model.inPlace = false
+          withAnimation {
+            if selection.cloudAvailable { selection.select(.cloud) }
+            else { selection.cloudReady() }
+          }
+        }
+        cloudController = controller
+        await controller.load()
+      }
     }
   }
 #endif

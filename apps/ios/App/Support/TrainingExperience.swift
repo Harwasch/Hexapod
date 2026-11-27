@@ -197,6 +197,13 @@ struct CloudSplatRecord: Codable, Sendable {
       withIntermediateDirectories: true)
     try JSONEncoder().encode(self).write(to: Self.url(for: capture), options: .atomic)
   }
+  @discardableResult func saveIfChanged(for capture: LocalCapture) throws -> Bool {
+    if let previous = Self.load(for: capture), previous.siteID == siteID, previous.scanID == scanID {
+      return false
+    }
+    try save(for: capture)
+    return true
+  }
   /// The public scan viewer addresses a site with a fragment. The native globe
   /// route additionally selects scanID for exact capture selection.
   func shareURL(webBaseURL: URL?) -> URL? {
