@@ -34,7 +34,7 @@ vi.mock("cesium", async (original) => ({
 vi.mock("@/cesium/createGlobeWidget", () => ({ createGlobeWidget: hooks.widget }));
 vi.mock("@/cesium/providers/tiles", () => ({ createEmbedScanTileset: hooks.load }));
 vi.mock("@/cesium/providers/imagery", () => ({
-  createNaturalEarthProvider: vi.fn(async () => ({})),
+  createNaturalEarthProvider: vi.fn(() => Promise.resolve({})),
 }));
 vi.mock("./basemap", () => ({
   installBasemap: vi.fn<typeof installBasemap>((_v, _token, _status, ready) => {
