@@ -792,6 +792,11 @@ export function instancesDocOf(assetId: string): InstancesDoc | undefined {
   return ATTACHED.get(assetId)?.doc;
 }
 
+/** Where `assetId`'s `instances.json` was read from (a signed URL's query kept), once loaded. */
+export function instancesUrlOf(assetId: string): string | undefined {
+  return ATTACHED.get(assetId)?.instancesUrl;
+}
+
 /** The hooks of `assetId`'s scan, once its instances loaded: what keys motion on instances. */
 export function instancesHookOf(assetId: string): SplatInstances | undefined {
   return ATTACHED.get(assetId)?.hook;
