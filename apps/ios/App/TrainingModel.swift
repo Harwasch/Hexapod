@@ -277,11 +277,13 @@
       guard let scene, let renderer else { return }
       let view: simd_float4x4
       let projection: simd_float4x4
+      var viewport = size
       if inPlace {
-        guard let camera, let matrices = camera.trainedSplatCamera(size: size, capture: capture.directory)
+        guard let camera, let matrices = camera.trainedSplatCamera(capture: capture.directory)
         else { inPlace = false; return }
         camera.showTrainedSplat(renderer)
-        view = matrices.0; projection = matrices.1
+        view = matrices.view; projection = matrices.projection
+        viewport = matrices.size
       } else {
         view = Self.matrix(orbit.pose).inverse
         let aspect = Float(max(1,size.width) / max(1,size.height))

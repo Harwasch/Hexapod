@@ -67,6 +67,18 @@
       }
     }
 
+    /// The ARView fills the screen; its bounds include the overlay's safe areas.
+    public func setViewport(_ size: CGSize) {
+      lock.withLock {
+        let width = Float(max(1, size.width))
+        let height = Float(max(1, size.height))
+        if uniforms.viewport.x != width || uniforms.viewport.y != height {
+          uniforms.viewport.x = width
+          uniforms.viewport.y = height
+          liveMatrices = nil
+        }
+      }
+    }
     public func setLiveCamera(_ enabled: Bool) {
       lock.withLock { liveCamera = enabled; liveMatrices = nil }
     }

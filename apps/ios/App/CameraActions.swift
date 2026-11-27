@@ -111,16 +111,17 @@ import simd
     guard !LaunchMode.current.isUITest, usesLiveCapture, cameraReady, let view = arView, view.session.currentFrame != nil else { return false }
     return splatWorld.permits(capture: capture, session: ObjectIdentifier(view.session))
   }
-  func trainedSplatCamera(size: CGSize, capture: URL) -> (simd_float4x4, simd_float4x4)? {
+  func trainedSplatCamera(capture: URL) -> (view: simd_float4x4, projection: simd_float4x4, size: CGSize)? {
     guard canPlaceSplat(capture: capture), let view = arView,
       let frame = view.session.currentFrame else { return nil }
     let orientation = view.window?.windowScene?.interfaceOrientation ?? .portrait
     return (frame.camera.viewMatrix(for: orientation),
-      frame.camera.projectionMatrix(for: orientation, viewportSize: size, zNear: 0.02, zFar: 100))
+      frame.camera.projectionMatrix(for: orientation, viewportSize: view.bounds.size, zNear: 0.02, zFar: 100), view.bounds.size)
   }
   func showTrainedSplat(_ renderer: SavedSplatRenderer?) {
+    guard let view = arView else { frameFeed.setTrainedPreview(nil); return }
+    renderer?.setViewport(view.bounds.size)
     frameFeed.setTrainedPreview(renderer)
-    guard let view = arView else { return }
     if let renderer {
       view.renderCallbacks.postProcess = { @Sendable context in renderer.composite(context) }
     } else { view.renderCallbacks.postProcess = nil }
