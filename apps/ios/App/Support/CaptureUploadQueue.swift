@@ -13,6 +13,10 @@ import Upload
 #endif
 @MainActor final class CaptureUploadQueue {
   static let shared = CaptureUploadQueue()
+  private let fixtureAPI: (any FixtureCaptureServing)?
+  init(fixtureAPI: (any FixtureCaptureServing)? = LaunchMode.current.captureAPI) {
+    self.fixtureAPI = fixtureAPI
+  }
   private var uploaders: [String: BundleUploader] = [:]
   private var refinementTasks: [String: Task<Void, Never>] = [:]
   private(set) var pendingRefinements: Set<String> = []
@@ -23,16 +27,16 @@ import Upload
   func enqueue(_ capture: LocalCapture, siteName: String? = nil, siteID: UUID? = nil) async {
     let id = capture.id
     guard !starting.contains(id) else { return }
+    if let fixtureAPI {
+      do {
+        states[id] = try await fixtureAPI.store(capture, siteName: siteName, siteID: siteID)
+        issues[id] = nil
+      } catch { issues[id] = "Retry upload" }
+      return
+    }
     let config = ServiceConfiguration(defaults: .standard)
     guard !config.writeToken.isEmpty else {
       issues[id] = "Sign in"
-      return
-    }
-    if let fixture = LaunchMode.current.captureAPI {
-      do {
-        states[id] = try await fixture.store(capture, siteName: siteName, siteID: siteID)
-        issues[id] = nil
-      } catch { issues[id] = "Retry upload" }
       return
     }
     guard let api = config.apiRoot else {
@@ -103,11 +107,14 @@ import Upload
   /// Called only after the product's cost confirmation. Upload completion may be
   /// delivered by URLSession after this screen closes; the intent survives relaunch.
   func requestRefinement(_ capture: LocalCapture) async throws {
-    guard !APICredentials.token.isEmpty else { throw APICredentials.CredentialError.unavailable }
+    if fixtureAPI == nil, APICredentials.token.isEmpty { throw APICredentials.CredentialError.unavailable }
     try CloudRefineIntent.confirm(for: capture)
     issues[capture.id] = nil
     await enqueue(capture)
-    monitorRefinement(capture)
+    if fixtureAPI != nil {
+      try await refineInCloud(capture)
+      try CloudRefineIntent.complete(for: capture)
+    } else { monitorRefinement(capture) }
   }
   private func monitorRefinement(_ capture: LocalCapture) {
     guard refinementTasks[capture.id] == nil else { return }
@@ -134,8 +141,8 @@ import Upload
   }
 
   func refineInCloud(_ capture: LocalCapture) async throws {
-    if let fixture = LaunchMode.current.captureAPI {
-      states[capture.id] = try await fixture.refine(capture)
+    if let fixtureAPI {
+      states[capture.id] = try await fixtureAPI.refine(capture)
       return
     }
     let config = ServiceConfiguration(defaults: .standard)

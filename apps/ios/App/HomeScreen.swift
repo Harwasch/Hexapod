@@ -68,6 +68,7 @@ enum HexStyle {
             .padding(12).background(HexStyle.panel, in: RoundedRectangle(cornerRadius: 18))
           }
           .buttonStyle(.plain)
+          .accessibilityElement(children: .contain)
           .accessibilityIdentifier("capture.row.\(capture.id)")
           .contextMenu {
             if let record = capture.local.phoneSplat {
@@ -441,18 +442,9 @@ private struct CaptureRow: Identifiable, Sendable {
     {
       local = LocalCapture(directory: local.directory, upload: upload)
     }
-    if let fixture = LaunchMode.current.captureAPI {
-      do {
-        remote = try await fixture.status(local)
-        serverUnavailable = false
-      } catch { serverUnavailable = true }
-      return
-    }
-    guard let base = configuration.apiRoot,
-      let id = local.upload?.captureID.flatMap(UUID.init(uuidString:)), local.upload?.uploadComplete == true
-    else { return }
     do {
-      remote = try await CatalogCaptureState.fetch(captureID: id, baseURL: base)
+      guard let fetched = try await CaptureStatus.fetch(local, configuration: configuration) else { return }
+      remote = fetched
       if let route, let scanID = route.scanID {
         try? CloudSplatRecord(siteID: route.siteID, scanID: scanID).save(for: local)
       }

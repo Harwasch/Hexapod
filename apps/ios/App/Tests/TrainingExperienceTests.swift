@@ -127,3 +127,34 @@ import Testing
   world.invalidate()
   #expect(!world.permits(capture: capture, session: ObjectIdentifier(first)))
 }
+
+@Test func sessionProgressUsesNativeBudgetOrPortableElapsedTime() {
+  #expect(TrainingPresentation.fraction(step: 750, budget: 1500, elapsed: 1, remaining: 1) == 0.5)
+  #expect(TrainingPresentation.fraction(step: 1, budget: nil, elapsed: 1, remaining: 2) == 1.0 / 3.0)
+  #expect(TrainingPresentation.fraction(step: 3, budget: nil, elapsed: 3, remaining: 0) == 1)
+  #expect(TrainingPresentation.fraction(step: 99, budget: 1, elapsed: 0, remaining: 0) == 1)
+  #expect(TrainingPresentation.fraction(step: -1, budget: 1, elapsed: 0, remaining: 0) == 0)
+  #expect(TrainingPresentation.fraction(step: 1, budget: nil, elapsed: .nan, remaining: 1) == 0)
+  #expect(TrainingPresentation.fraction(step: 1, budget: nil, elapsed: 1, remaining: -1) == 0)
+}
+
+@Test func savedPreviewIsAtomicBackwardCompatibleAndCleanedOnReplacement() throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+  let capture = LocalCapture(directory: root.appendingPathComponent("Captures/scan"), upload: nil)
+  let ply = root.appendingPathComponent("input.ply")
+  try Data("ply".utf8).write(to: ply)
+  let png = Data([137, 80, 78, 71])
+  let first = try PhoneSplatRecord.save(ply: ply, sharpness: nil, checkpoint: nil, for: capture,
+    previewPNG: png, simulated: true)
+  let imageURL = try #require(first.previewURL(for: capture))
+  #expect(try Data(contentsOf: imageURL) == png)
+  #expect(PhoneSplatRecord.load(for: capture)?.simulated == true)
+  let second = try PhoneSplatRecord.save(ply: ply, sharpness: nil, checkpoint: nil, for: capture)
+  #expect(!FileManager.default.fileExists(atPath: imageURL.path))
+  #expect(second.previewURL(for: capture) == nil)
+  let legacy = Data("{\"file\":\"trained.ply\",\"sharpness\":50}".utf8)
+  let decoded = try JSONDecoder().decode(PhoneSplatRecord.self, from: legacy)
+  #expect(decoded.previewFile == nil && decoded.simulated == nil)
+}

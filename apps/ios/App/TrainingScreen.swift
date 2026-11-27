@@ -13,6 +13,7 @@
     let done: () -> Void
     @State private var model: TrainingModel
     @State private var selection = SplatSelection()
+    @State private var fixtureCloudReady = false
     @State private var cloudRoute: GlobeRoute?
     @State private var cloudController: TrainingCloudController?
     @State private var remote: CatalogCaptureState?
@@ -37,27 +38,47 @@
       return CGFloat(surface.width) / CGFloat(max(1, surface.height))
     }
     private var isResult: Bool { model.experience.stage == .result }
-    private var canPlace: Bool { camera?.canPlaceSplat(capture: model.capture.directory) == true }
+    private var canPlace: Bool {
+      !LaunchMode.current.isUITest && camera?.canPlaceSplat(capture: model.capture.directory) == true
+    }
+    private var needsCloudSignIn: Bool {
+      LaunchMode.current.captureAPI == nil && APICredentials.token.isEmpty
+    }
+    @ViewBuilder private var phonePreview: some View {
+      if let image = model.previewImage {
+        Image(uiImage: image).resizable().scaledToFit()
+      } else if LaunchMode.current.isUITest {
+        HexStyle.background
+      } else {
+        TrainingMetalView(surface: model.surface, renderer: model.renderer, paused: showCloud)
+      }
+    }
     private var showCloud: Bool { selection.source == .cloud && !model.inPlace }
     var body: some View {
       GeometryReader { geometry in
         ZStack {
           if !model.inPlace { HexStyle.background.ignoresSafeArea() }
           if !model.inPlace {
-            TrainingMetalView(surface: model.surface, renderer: model.renderer, paused: showCloud)
+            phonePreview
               .aspectRatio(previewAspect, contentMode: .fit)
               .ignoresSafeArea().opacity(showCloud ? 0 : 1)
               .scaleEffect(model.experience.stage == .settling ? 1.025 : 1)
               .animation(.easeOut(duration: 0.6), value: model.experience.stage)
               .accessibilityHidden(showCloud)
               .accessibilityIdentifier(TrainingID.orbit)
-              .accessibilityLabel("Splat. Drag to orbit, pinch to zoom, double tap to focus.")
+              .accessibilityLabel(model.previewImage == nil ? "Splat. Drag to orbit, pinch to zoom, double tap to focus." : "Phone preview")
               .gesture(orbitGesture)
               .simultaneousGesture(zoomGesture)
               .onTapGesture(count: 2) { withAnimation { model.focus() } }
               .accessibilityAction(named: "Focus") { model.focus() }
               .accessibilityAction(named: "Zoom in") { model.orbit.zoom(factor: 1.25) }
               .accessibilityAction(named: "Zoom out") { model.orbit.zoom(factor: 0.8) }
+          }
+          if fixtureCloudReady, isResult, let image = model.previewImage {
+            Image(uiImage: image).resizable().scaledToFit()
+              .opacity(showCloud ? 1 : 0).allowsHitTesting(showCloud)
+              .accessibilityHidden(!showCloud).accessibilityIdentifier(TrainingID.orbit)
+              .accessibilityLabel("Simulated cloud scan")
           }
           if let cloudController, isResult {
             TrainingCloudPreview(controller: cloudController)
@@ -79,6 +100,7 @@
         .animation(.easeInOut(duration: 0.4), value: model.inPlace)
         .task {
           await model.loadExisting()
+          if LaunchMode.current.isUITest { return }
           while !Task.isCancelled {
             if !showCloud { await model.tick(size: geometry.size, camera: camera) }
             do { try await Task.sleep(for: .milliseconds(80)) } catch { return }
@@ -88,6 +110,12 @@
       .preferredColorScheme(.dark).foregroundStyle(HexStyle.text)
       .background(model.inPlace ? Color.clear : HexStyle.background)
       .task { await pollCloud() }
+      .onChange(of: queue.states[model.capture.id]) { _, _ in
+        if LaunchMode.current.isUITest { Task { await refreshCloud() } }
+      }
+      .onChange(of: model.experience.stage) { _, stage in
+        if LaunchMode.current.isUITest, stage == .result { Task { await refreshCloud() } }
+      }
       .onChange(of: phase) { _, value in
         Task { await model.setActive(value == .active) }
         if value != .active { camera?.showTrainedSplat(nil) }
@@ -124,7 +152,7 @@
           Label("On your phone", systemImage: "iphone").font(.headline)
         }
         Spacer()
-        if model.simulated || camera?.simulated == true || UIFixtureLaunch.active {
+        if model.simulated || camera?.simulated == true || LaunchMode.current.isUITest {
           Text("Simulated").font(.caption)
         }
         Button { close() } label: {
@@ -280,7 +308,7 @@
       }
       if !selection.cloudAvailable, remote?.status != "complete" {
         Button {
-          if APICredentials.token.isEmpty { showSettings = true }
+          if needsCloudSignIn { showSettings = true }
           else { refineConfirmation = true }
         } label: {
           Label("Refine in cloud", systemImage: "cloud")
@@ -289,10 +317,10 @@
             }.frame(maxWidth: .infinity).frame(height: 48)
         }.buttonStyle(.borderedProminent).tint(HexStyle.teal)
           .accessibilityIdentifier(TrainingID.refine).disabled(refining || cloudRunning)
-        if refining || cloudRunning {
-          Label(cloudLabel, systemImage: "icloud.and.arrow.up").font(.caption)
-            .accessibilityIdentifier(TrainingID.refineProgress)
-        }
+      }
+      if remote != nil || refining || cloudRunning {
+        Label(cloudLabel, systemImage: "icloud.and.arrow.up").font(.caption)
+          .accessibilityIdentifier(TrainingID.refineProgress)
       }
     }
     @ViewBuilder private var retryControls: some View {
@@ -305,7 +333,7 @@
       if refineFailed || queue.issues[model.capture.id] == "Retry cloud" {
         Text("Cloud needs another try. Your phone scan is safe.").font(.caption)
         Button("Try cloud again", systemImage: "arrow.clockwise") {
-          if APICredentials.token.isEmpty { showSettings = true }
+          if needsCloudSignIn { showSettings = true }
           else { refineConfirmation = true }
         }.frame(minHeight: 48).accessibilityIdentifier(TrainingID.refineRetry)
       }
@@ -356,43 +384,51 @@
       do { try await queue.requestRefinement(model.capture) }
       catch { refineFailed = true }
       refining = false
+      await refreshCloud()
     }
     private func pollCloud() async {
       while !Task.isCancelled {
-        await queue.refresh(model.capture)
-        let upload = queue.states[model.capture.id] ?? model.capture.upload
-        if let base = ServiceConfiguration(defaults: .standard).apiRoot,
-          let id = upload?.captureID.flatMap(UUID.init(uuidString:)), upload?.uploadComplete == true {
-          do {
-            let fetched = try await CatalogCaptureState.fetch(captureID: id, baseURL: base)
-            remote = fetched
-            cloudLabel = CaptureStatus.label(upload: upload, remote: fetched, unavailable: false)
-            if let route = CaptureStatus.trainedRoute(upload: upload, remote: fetched), registry != nil {
-              cloudRoute = route
-              if let scanID = route.scanID {
-                try? CloudSplatRecord(siteID: route.siteID, scanID: scanID).save(for: model.capture)
-              }
-              // Existing globe renderer handles published 3D Tiles/SPZ. Keep the
-              // native phone surface mounted as fallback throughout the crossfade.
-              if isResult, cloudController == nil {
-                let controller = TrainingCloudController(route: route, configuration: ServiceConfiguration(defaults: .standard))
-                controller.onReady = {
-                  model.inPlace = false
-                  withAnimation {
-                    if selection.cloudAvailable { selection.select(.cloud) }
-                    else { selection.cloudReady() }
-                  }
-                }
-                cloudController = controller
-                await controller.load()
-              }
-            }
-          } catch { cloudLabel = "Connection paused" }
-        } else {
-          cloudLabel = CaptureStatus.label(upload: upload, remote: remote, unavailable: false)
-        }
+        await refreshCloud()
+        if LaunchMode.current.isUITest { return }
         do { try await Task.sleep(for: .seconds(3)) } catch { return }
       }
+    }
+    private func refreshCloud() async {
+      await queue.refresh(model.capture)
+      let upload = queue.states[model.capture.id] ?? model.capture.upload
+      let local = LocalCapture(directory: model.capture.directory, upload: upload)
+      do {
+        let configuration = ServiceConfiguration(defaults: .standard)
+        guard let fetched = try await CaptureStatus.fetch(local, configuration: configuration) else {
+          cloudLabel = CaptureStatus.label(upload: upload, remote: remote, unavailable: false)
+          return
+        }
+        remote = fetched
+        cloudLabel = CaptureStatus.label(upload: upload, remote: fetched, unavailable: false)
+        guard let route = CaptureStatus.trainedRoute(upload: upload, remote: fetched) else { return }
+        cloudRoute = route
+        if let scanID = route.scanID {
+          try? CloudSplatRecord(siteID: route.siteID, scanID: scanID).save(for: model.capture)
+        }
+        if LaunchMode.current.isUITest {
+          fixtureCloudReady = true
+          if isResult { selection.cloudReady() }
+          return
+        }
+        // Published 3D Tiles use the existing renderer; native Phone remains mounted.
+        if isResult, cloudController == nil, registry != nil {
+          let controller = TrainingCloudController(route: route, configuration: configuration)
+          controller.onReady = {
+            model.inPlace = false
+            withAnimation {
+              if selection.cloudAvailable { selection.select(.cloud) }
+              else { selection.cloudReady() }
+            }
+          }
+          cloudController = controller
+          await controller.load()
+        }
+      } catch { cloudLabel = "Connection paused" }
     }
   }
 #endif

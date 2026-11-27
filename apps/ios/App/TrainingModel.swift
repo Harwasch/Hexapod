@@ -10,7 +10,7 @@
 
   @MainActor @Observable final class TrainingModel {
     let capture: LocalCapture
-    let simulated: Bool
+    private(set) var simulated: Bool
     var experience = TrainingExperience()
     var best = false
     var progress = 0.0
@@ -18,6 +18,8 @@
     var sharpness: Int?
     var thermal = false
     var surface: MetalPreviewSurface?
+    var previewImage: UIImage?
+    private var previewPNG: Data?
     var scene: SavedSplat?
     var renderer: SavedSplatRenderer?
     var orbit = SplatOrbit()
@@ -26,7 +28,8 @@
     var inPlace = false
     var cameraOnly = false
     var interacting = false
-    private var trainer: PhoneTrainer?
+    private var session: (any PhoneTrainingSession)?
+    private var nativePreview: (any PhoneTrainingNativePreview)?
     private var operation: Task<Void, Never>?
     private var observer: Task<Void, Never>?
     private var previewObserver: Task<Void, Never>?
@@ -35,13 +38,22 @@
     private var lastTick: Double?
     private var cameraOpacity: Float = 0
 
-    init(capture: LocalCapture) { self.capture = capture; simulated = capture.isSimulated }
+    init(capture: LocalCapture) {
+      self.capture = capture
+      simulated = capture.isSimulated || LaunchMode.current.isUITest
+    }
 
     func loadExisting() async {
       let capture = capture
       guard let record = await Task.detached(operation: { capture.phoneSplat }).value else { return }
       do {
-        try await loadResult(record.url(for: capture))
+        simulated = simulated || record.simulated == true
+        if let url = record.previewURL(for: capture) {
+          let data = try await Task.detached { try Data(contentsOf: url) }.value
+          previewPNG = data
+          previewImage = UIImage(data: data)
+        }
+        try await loadResult(record.url(for: capture), bitmapOnly: previewImage != nil || LaunchMode.current.isUITest)
         sharpness = record.sharpness
         experience.showResult()
       } catch { experience.fail() }
@@ -53,85 +65,98 @@
       progress = 0
       eta = "—"
       sharpness = nil
+      previewPNG = nil
+      previewImage = nil
+      surface = nil
+      scene = nil
+      renderer = nil
       let config = best ? PhoneTrainingConfig.best : PhoneTrainingConfig.quick
       operation = Task { [self] in
-        var prepared: PreparedDataset?
         do {
-          let prep = PrepConfig()
-          let dataset = try await CaptureDatasetBuilder().prepare(bundle: capture.directory, config: prep)
-          prepared = dataset
-          guard !stopRequested else { try dataset.cleanup(); operation = nil; return }
-          // Seed centre from training geometry, not camera-origin assumptions.
-          let xyz = dataset.descriptor.points.xyz
-          var center = SIMD3<Float>(repeating: 0)
-          let count = dataset.descriptor.points.count
-          for i in 0..<count { center += SIMD3(xyz[i*3], xyz[i*3+1], xyz[i*3+2]) }
-          if count > 0 { center /= Float(count) }
-          orbit.center = center
-          let pose = dataset.descriptor.frames[0].cameraToWorld.elements
-          let camera = SIMD3(pose[3], pose[7], pose[11])
-          let delta = camera - center
-          orbit.distance = max(0.3, simd_length(delta))
-          orbit.yaw = atan2(delta.x, delta.z)
-          orbit.pitch = asin(max(-0.95, min(0.95, delta.y / orbit.distance)))
-          let root = PhoneSplatRecord.directory(for: capture).appendingPathComponent("Training")
-          let trainer = PhoneTrainer(dataset: dataset, capture: capture.directory,
-            outputDirectory: root, prep: prep, config: config)
-          self.trainer = trainer
-          prepared = nil
-          await trainer.setActive(active)
-          await trainer.setPreviewPose(try CameraPose(elements: orbit.pose))
-          let events = await trainer.progress()
+          let output = PhoneSplatRecord.directory(for: capture).appendingPathComponent("Training")
+          let selected = try await PhoneTrainingFactory.make(outputDirectory: output) {
+            let prep = PrepConfig()
+            let dataset = try await CaptureDatasetBuilder().prepare(bundle: capture.directory, config: prep)
+            do {
+              if stopRequested { throw CancellationError() }
+              // Only production construction prepares data or acquires a native owner.
+              let xyz = dataset.descriptor.points.xyz
+              var center = SIMD3<Float>(repeating: 0)
+              let count = dataset.descriptor.points.count
+              for i in 0..<count { center += SIMD3(xyz[i*3], xyz[i*3+1], xyz[i*3+2]) }
+              if count > 0 { center /= Float(count) }
+              orbit.center = center
+              let pose = dataset.descriptor.frames[0].cameraToWorld.elements
+              let cameraPosition = SIMD3(pose[3], pose[7], pose[11])
+              let delta = cameraPosition - center
+              orbit.distance = max(0.3, simd_length(delta))
+              orbit.yaw = atan2(delta.x, delta.z)
+              orbit.pitch = asin(max(-0.95, min(0.95, delta.y / orbit.distance)))
+              let owner = PhoneTrainer(dataset: dataset, capture: capture.directory,
+                outputDirectory: output, prep: prep, config: config)
+              return DevicePhoneTrainingSession(trainer: owner)
+            } catch {
+              try? dataset.cleanup()
+              throw error
+            }
+          }
+          session = selected
+          nativePreview = selected as? any PhoneTrainingNativePreview
+          await selected.setActive(active)
+          if stopRequested { await selected.cancel() }
+          if let nativePreview {
+            await nativePreview.setPreviewPose(try CameraPose(elements: orbit.pose))
+            let previews = await nativePreview.previews()
+            previewObserver = Task { [weak self] in
+              for await surface in previews { self?.surface = surface }
+            }
+          } else {
+            previewPNG = try await selected.previewImage()
+            if let previewPNG { previewImage = UIImage(data: previewPNG) }
+          }
+          let events = await selected.progress()
+          let budget: Int? = nativePreview == nil ? nil : Int(config.iterations)
           observer = Task { [weak self] in
             for await event in events {
               guard let self else { return }
+              guard self.experience.stage.busy, self.experience.stage != .settling else { continue }
               if let sample = event.sample {
-                self.progress = min(1, Double(sample.step) / Double(config.iterations))
+                self.progress = TrainingPresentation.fraction(step: sample.step, budget: budget,
+                  elapsed: sample.elapsedSeconds, remaining: sample.etaSeconds)
                 self.eta = TrainingPresentation.eta(sample.etaSeconds)
                 self.thermal = sample.thermalState >= 2
               }
               self.sharpness = TrainingPresentation.sharpness(psnr: event.psnr)
             }
           }
-          let previews = await trainer.previews()
-          previewObserver = Task { [weak self] in
-            for await surface in previews { self?.surface = surface }
-          }
           experience.prepared()
-          try await finishRun(trainer)
+          try await finishRun(selected)
         } catch {
           if stopRequested { experience.cancel() } else { experience.fail() }
         }
         if !critical {
-          if let trainer { try? await trainer.closeAndCleanup() }
-          else if let prepared { try? prepared.cleanup() }
-          trainer = nil
+          if let session { try? await session.closeAndCleanup() }
+          session = nil
+          nativePreview = nil
           observer?.cancel(); previewObserver?.cancel()
         }
         operation = nil
       }
     }
 
-    private func finishRun(_ trainer: PhoneTrainer) async throws {
-      let outcome = try await trainer.run()
-      if outcome == .critical {
-        critical = true
-        thermal = true
-        experience.cool()
-        return
-      }
-      guard outcome == .finished, !stopRequested else { experience.cancel(); return }
-      let ply: URL
+    private func finishRun(_ selected: any PhoneTrainingSession) async throws {
+      let result: PhoneTrainingResult
       do {
-        try await waitForForeground()
+        result = try await selected.run()
         if stopRequested { experience.cancel(); return }
-        let metrics = try await trainer.evaluate()
-        sharpness = TrainingPresentation.sharpness(psnr: metrics.psnr)
-        try await waitForForeground()
-        if stopRequested { experience.cancel(); return }
-        ply = try await trainer.exportPLY()
+        if let nativePreview {
+          try await waitForForeground()
+          if stopRequested { experience.cancel(); return }
+          let measured = try await nativePreview.evaluatePSNR()
+          sharpness = TrainingPresentation.sharpness(psnr: measured)
+        }
       } catch {
-        if await trainer.needsCooling(), !stopRequested {
+        if let nativePreview, await nativePreview.needsCooling(), !stopRequested {
           critical = true
           thermal = true
           experience.cool()
@@ -139,26 +164,43 @@
         }
         throw error
       }
+      if stopRequested { experience.cancel(); return }
+      simulated = simulated || result.simulated
+      let ply = result.ply
       let capture = capture
       let score = sharpness
+      let png = previewPNG
+      let isSimulated = simulated
       let record = try await Task.detached(priority: .utility) {
-        try PhoneSplatRecord.save(ply: ply, sharpness: score, checkpoint: nil, for: capture)
+        try PhoneSplatRecord.save(ply: ply, sharpness: score, checkpoint: nil, for: capture,
+          previewPNG: png, simulated: isSimulated)
       }.value
-      try await trainer.closeAndCleanup()
-      self.trainer = nil
+      try await selected.closeAndCleanup()
+      session = nil
+      nativePreview = nil
       observer?.cancel(); previewObserver?.cancel()
       progress = 1
       experience.finish()
-      try await loadResult(record.url(for: capture))
+      try await loadResult(record.url(for: capture), bitmapOnly: previewImage != nil || LaunchMode.current.isUITest)
       guard !stopRequested else { experience.cancel(); return }
-      UINotificationFeedbackGenerator().notificationOccurred(.success)
-      try await Task.sleep(for: .milliseconds(600))
+      if !LaunchMode.current.isUITest {
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        try await Task.sleep(for: .milliseconds(600))
+      }
       experience.showResult()
     }
     private func waitForForeground() async throws {
       while !active && !stopRequested { try await Task.sleep(for: .milliseconds(100)) }
     }
-    private func loadResult(_ url: URL) async throws {
+    private func loadResult(_ url: URL, bitmapOnly: Bool) async throws {
+      shareURL = url
+      if bitmapOnly {
+        guard previewImage != nil else { throw PrepError.invalid("Preview missing") }
+        surface = nil
+        scene = nil
+        renderer = nil
+        return
+      }
       let result = try await Task.detached(priority: .userInitiated) {
         try SavedSplat(data: Data(contentsOf: url, options: .mappedIfSafe))
       }.value
@@ -171,19 +213,20 @@
     }
     func pause() async {
       experience.pause()
-      await trainer?.pause()
+      await session?.pause()
     }
     func resume() async {
-      guard let trainer else { return }
+      guard let selected = session else { return }
       experience.resume()
-      await trainer.resume()
+      await selected.resume()
       if critical, operation == nil {
         critical = false
         operation = Task { [self] in
-          do { try await finishRun(trainer) } catch { experience.fail() }
+          do { try await finishRun(selected) } catch { experience.fail() }
           if !critical {
-            if self.trainer != nil { try? await trainer.closeAndCleanup() }
-            self.trainer = nil
+            if session != nil { try? await selected.closeAndCleanup() }
+            session = nil
+            nativePreview = nil
             observer?.cancel(); previewObserver?.cancel()
           }
           operation = nil
@@ -193,14 +236,15 @@
     func setActive(_ value: Bool) async {
       active = value
       lastTick = nil
-      await trainer?.setActive(value)
+      await session?.setActive(value)
     }
     func stop() async {
       stopRequested = true
-      await trainer?.cancel()
+      await session?.cancel()
       await operation?.value
-      if let trainer { try? await trainer.closeAndCleanup() }
-      trainer = nil
+      if let session { try? await session.closeAndCleanup() }
+      session = nil
+      nativePreview = nil
       observer?.cancel(); previewObserver?.cancel()
     }
     func focus() {
@@ -210,7 +254,7 @@
       orbit.pitch = 0.15
     }
     func tick(size: CGSize, camera: CameraModel?) async {
-      guard active else { return }
+      guard active, !LaunchMode.current.isUITest else { return }
       let now = ProcessInfo.processInfo.systemUptime
       let frameSeconds = Float(min(0.2, max(0, now - (lastTick ?? now))))
       let targetOpacity: Float = cameraOnly ? 0 : 1
@@ -220,8 +264,8 @@
         orbit.yaw += elapsed * 0.08
       }
       lastTick = now
-      if let trainer, let pose = try? CameraPose(elements: orbit.pose) {
-        await trainer.setPreviewPose(pose)
+      if let nativePreview, let pose = try? CameraPose(elements: orbit.pose) {
+        await nativePreview.setPreviewPose(pose)
       }
       guard let scene, let renderer else { return }
       let view: simd_float4x4

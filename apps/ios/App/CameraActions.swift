@@ -108,7 +108,7 @@ import simd
   private var splatWorld = SplatWorldOrigin()
   func invalidateSplatOrigin() { splatWorld.invalidate() }
   func canPlaceSplat(capture: URL) -> Bool {
-    guard usesLiveCapture, cameraReady, let view = arView, view.session.currentFrame != nil else { return false }
+    guard !LaunchMode.current.isUITest, usesLiveCapture, cameraReady, let view = arView, view.session.currentFrame != nil else { return false }
     return splatWorld.permits(capture: capture, session: ObjectIdentifier(view.session))
   }
   func trainedSplatCamera(size: CGSize, capture: URL) -> (simd_float4x4, simd_float4x4)? {

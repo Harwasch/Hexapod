@@ -10,13 +10,13 @@ Captures have durable phone/cloud badges and share actions.
 
 | Behaviour                                          | Source, relative to `apps/ios`                                                         |
 | -------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| Product flow and icon controls                     | `App/TrainingScreen.swift:10`, presets at `:140`, results at `:224`                    |
-| Training lifetime and result loading               | `App/TrainingModel.swift:11`, finalization at `:115`, camera updates at `:212`         |
+| Product flow and icon controls                     | `App/TrainingScreen.swift:10`, presets at `:168`, results at `:252`                    |
+| Training lifetime and result loading               | `App/TrainingModel.swift:11`, finalization at `:147`, camera updates at `:256`         |
 | Metal snapshot display                             | `App/TrainingMetalView.swift:7`                                                        |
 | Serialized native previews and held-out evaluation | `Modules/PhoneTrain/Sources/PhoneTrain/PhoneTrainer.swift:34`, boundary work at `:296` |
 | Presets, snapshot cadence and active-step ETA      | `Modules/PhoneTrain/Sources/PhoneTrain/TrainingPolicy.swift:17`, `:96`, `:109`         |
-| UI state, Sharpness and durable result records     | `App/Support/TrainingExperience.swift:4`, `:50`, `:69`, `:108`                         |
-| Confirmed cloud request survives upload/relaunch   | `App/Support/CaptureUploadQueue.swift:99`                                              |
+| UI state, Sharpness and durable result records     | `App/Support/TrainingExperience.swift:4`, `:50`, `:69`, `:115`                         |
+| Confirmed cloud request survives upload/relaunch   | `App/Support/CaptureUploadQueue.swift:109`                                             |
 | Cloud tileset readiness and bridge                 | `App/TrainingCloudPreview.swift:12`, `:75`, `:104`                                     |
 | PLY decoding, sorting and orbit math               | `Modules/LiveSplat/Sources/LiveSplat/SavedSplat.swift:12`, `:94`, `:112`               |
 | World-pose compositing                             | `Modules/LiveSplat/Sources/LiveSplat/SavedSplatRenderer.swift:12`, `:75`, `:104`       |
@@ -137,21 +137,23 @@ The list below is the complete Apple-only file inventory, including the shader.
 `Support/CaptureUploadQueue.swift` is additionally listed because its iOS
 Observation expansion is excluded on Linux.
 
-| File                                                           | Audit                                                                                                                                                                                                                    |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `App/ARCameraView.swift`                                       | Locked frame-consumer handoff; only immutable matrices retained; origin invalidated on tracking reset.                                                                                                                   |
-| `App/CameraActions.swift`                                      | MainActor ARView access, current camera projection, Sendable renderer callback and explicit session/world identity lifetime.                                                                                             |
-| `App/CameraScreen.swift`                                       | Overlay keeps ARView mounted; explicit registry injection; post-scan hero identifier.                                                                                                                                    |
-| `App/DebugMenu.swift`                                          | Existing CameraScreen initializer receives an internal registry; no cross-module private symbols.                                                                                                                        |
-| `App/HomeScreen.swift`                                         | Small badge view, explicit hero label, URL ShareLinks, result cleanup and cost-confirm IDs. Existing raw backend error text removed.                                                                                     |
-| `App/TrainingModel.swift`                                      | UI MainActor; prep/training actors awaited; detached decoding/sorting pass Sendable values; cancellation awaits training before cleanup; thermal finalization returns to cooling.                                        |
-| `App/TrainingMetalView.swift`                                  | Synchronous Metal setup in a synchronous helper; MainActor delegate; one display command in flight; completed surfaces retained through GPU completion.                                                                  |
-| `App/TrainingScreen.swift`                                     | Small typed helper views; no arithmetic map/stride builders, optional-map interpolation, implicit-colour ternaries or duplicate declarations; lifecycle forwards to trainer.                                             |
-| `App/TrainingCloudPreview.swift`                               | MainActor WebKit delegates; completion-form JavaScript calls; JSON arguments; weak message proxy; same-origin checks; no Any values cross actors.                                                                        |
-| `Modules/PhoneTrain/Sources/PhoneTrain/PhoneTrainer.swift`     | Every session call awaits its runtime actor, including throwing iteration getters; preview completion precedes the next step; auxiliary ownership serializes checkpoints/evaluation/export.                              |
-| `Modules/LiveSplat/Sources/LiveSplat/SavedSplatRenderer.swift` | Immutable GPU geometry/pipelines, locked uniforms/order/live camera matrices; synchronous Metal factories; AR command buffer owns compositing. Narrow unchecked Sendable boundary matches the existing renderer pattern. |
-| `Modules/LiveSplat/Sources/LiveSplat/Shaders/SavedSplat.metal` | Five float4 Gaussian fields (80 bytes), two matrices plus float4 uniforms (144 bytes), matching Swift layout; covariance projection and premultiplied Gaussian blending.                                                 |
-| `App/Support/CaptureUploadQueue.swift`                         | MainActor pending requests/tasks, persisted intent before submission, actor uploader calls awaited; no credentials persisted in intent.                                                                                  |
+| File                                                               | Audit                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `App/ARCameraView.swift`                                           | Locked frame-consumer handoff; only immutable matrices retained; origin invalidated on tracking reset.                                                                                                                   |
+| `App/CameraActions.swift`                                          | MainActor ARView access, current camera projection, Sendable renderer callback and explicit session/world identity lifetime.                                                                                             |
+| `App/CameraScreen.swift`                                           | Overlay keeps ARView mounted; explicit registry injection; post-scan hero identifier.                                                                                                                                    |
+| `App/DebugMenu.swift`                                              | Existing CameraScreen initializer receives an internal registry; no cross-module private symbols.                                                                                                                        |
+| `App/HomeScreen.swift`                                             | Small badge view, explicit hero label, URL ShareLinks, result cleanup and cost-confirm IDs. Existing raw backend error text removed.                                                                                     |
+| `App/TrainingModel.swift`                                          | UI MainActor; prep/training actors awaited; detached decoding/sorting pass Sendable values; cancellation awaits training before cleanup; thermal finalization returns to cooling.                                        |
+| `App/TrainingMetalView.swift`                                      | Synchronous Metal setup in a synchronous helper; MainActor delegate; one display command in flight; completed surfaces retained through GPU completion.                                                                  |
+| `App/TrainingScreen.swift`                                         | Small typed helper views; no arithmetic map/stride builders, optional-map interpolation, implicit-colour ternaries or duplicate declarations; lifecycle forwards to trainer.                                             |
+| `App/TrainingCloudPreview.swift`                                   | MainActor WebKit delegates; completion-form JavaScript calls; JSON arguments; weak message proxy; same-origin checks; no Any values cross actors.                                                                        |
+| `Modules/PhoneTrain/Sources/PhoneTrain/PhoneTrainer.swift`         | Every session call awaits its runtime actor, including throwing iteration getters; preview completion precedes the next step; auxiliary ownership serializes checkpoints/evaluation/export.                              |
+| `Modules/LiveSplat/Sources/LiveSplat/SavedSplatRenderer.swift`     | Immutable GPU geometry/pipelines, locked uniforms/order/live camera matrices; synchronous Metal factories; AR command buffer owns compositing. Narrow unchecked Sendable boundary matches the existing renderer pattern. |
+| `Modules/LiveSplat/Sources/LiveSplat/Shaders/SavedSplat.metal`     | Five float4 Gaussian fields (80 bytes), two matrices plus float4 uniforms (144 bytes), matching Swift layout; covariance projection and premultiplied Gaussian blending.                                                 |
+| `Modules/PhoneTrain/Sources/PhoneTrain/PhoneTrainingSession.swift` | Optional public native capability; unchanged base protocol; adapter awaits every trainer operation and returns only Sendable values.                                                                                     |
+| `UITests/HexUITests.swift`                                         | MainActor XCTest helpers and synchronous predicate expectations; training/refine/relaunch flow awaits identifiers, with in-place absent without an AR session.                                                           |
+| `App/Support/CaptureUploadQueue.swift`                             | MainActor pending requests/tasks, persisted intent before submission, actor uploader calls awaited; no credentials persisted in intent.                                                                                  |
 
 All changed Apple Swift files receive an iOS-target frontend syntax parse. It does
 not resolve Apple SDK APIs, perform SwiftUI type checking or compile Metal. The
@@ -230,9 +232,9 @@ Still requires Xcode and a real LiDAR phone:
 
 No Mac CI dispatch, push, merge, deploy or GPU training was performed here.
 
-## Commit plan
+## Original commit plan
 
-Changes are left uncommitted as requested. Suggested decision-sized commits:
+These four steps were committed before the follow-up and rebased onto #138:
 
 1. **Keep product previews serialized with phone optimization**
    - `Modules/PhoneTrain/Sources/PhoneTrain/PhoneTrainer.swift`
@@ -254,3 +256,107 @@ Changes are left uncommitted as requested. Suggested decision-sized commits:
    - `App/HomeScreen.swift`, `App/DebugMenu.swift`
 4. **Record the device acceptance boundary for Build B**
    - `BUILD_B_REPORT.md`, `App/APPLE_API_AUDIT.md`, `SDK_PREFLIGHT.md`
+
+## Follow-up: integrate the #138 training seam
+
+This change depends on draft PR **#138**, branch `codex/ios-uitest-mode`, merging
+first. Its `PhoneTrainingSession`, launch factory, recorded PNG preview, isolated
+capture storage and in-process capture API remain the integration contract. No
+members of that base protocol or `PhoneTrainingResult` changed. The existing
+fixture implementation is unchanged.
+
+`TrainingModel` stores only `any PhoneTrainingSession` plus the optional
+`PhoneTrainingNativePreview` capability. Every session comes from
+`PhoneTrainingFactory.make(outputDirectory:real:)`; dataset preparation and native
+owner construction execute only inside `real`. The Device adapter alone adopts
+the optional capability for pose requests, Metal surfaces, held-out PSNR and
+thermal recovery. Its `run()` retains the original export contract; the optional
+quality measurement follows the completed run, before cleanup. There are no new
+msplat calls: `CameraPose.init(elements:)` remains at `MsplatSession.swift:43`,
+`MetalPreviewSurface` fields at `MetalPreviewSurface.swift:39–41`, and evaluation
+returns the existing `TrainingStats.swift:250` PSNR through the trainer. The full
+source inventory above remains applicable.
+
+Other sessions use `previewImage()` PNG bytes and their provided progress. The
+fixture's held-out Sharpness stays unknown. A portable progress function uses
+elapsed/remaining time when no native step budget is available. The PNG and
+simulation marker are saved atomically with the result manifest, so reopening a
+fixture result never parses its ASCII PLY with the native binary reader. Older
+result manifests still decode. Production binary PLY rendering is unchanged.
+
+Catalog reads now share `CaptureStatus.fetch`, which routes through
+`LaunchMode.current.captureAPI` before considering a service URL. The queue uses
+that same fixture API for storage and confirmed refinement, without credentials,
+HTTP or upload polling. Production credential checks and durable intent monitoring
+are retained. Fixture Ready updates badges and the source toggle using the saved
+PNG, without creating a Metal view or web view. UI-test updates are driven by
+session/state events; there is no training display timer, orbit sorting, settling
+sleep or success haptic. All 30 existing identifiers above remain unchanged.
+
+The two hand-resolved conflicts were checked: `CameraActions.suspend()` retains
+both `previewTask` cancellation and `frameFeed.setTrainedPreview(nil)`;
+`CameraScreen` retains `CameraTimeline { date in ... }` and applies opacity and
+hit-testing to the complete timeline while training covers it. `HexApp`,
+`DebugMenu`, `TrainBenchmarkScreen` and `LaunchMode` retain #138's quiet launch
+and benchmark guards. They need no additional changes. In-place eligibility now
+also explicitly rejects UI-test mode, including the production-provider probe.
+There are no duplicate declarations.
+
+### Follow-up compile self-audit
+
+Every Apple-only line changed in this follow-up was re-read. The complete changed
+Apple-only list is below; the cumulative Build B list above includes the new
+adapter capability and UI test as well.
+
+- `App/TrainingModel.swift`: MainActor UIKit image decoding; only PNG Data crosses
+  detached disk operations; protocol lifecycle awaits; optional native calls await;
+  preparation occurs only in the factory closure; no direct trainer field.
+- `App/TrainingScreen.swift`: small bitmap/native helper view; existing identifier
+  constants preserved; Equatable upload-state observation replaces fixture polling;
+  fixture cloud view is a still PNG; real web readiness and native rendering remain.
+- `App/CameraActions.swift`: one MainActor eligibility guard; the merged suspension
+  cleanup remains intact and the world-identity policy is unchanged.
+- `App/HomeScreen.swift`: shared catalog route, persisted fixture cloud badge and
+  explicit accessibility containment for badge descendants; existing UI-test return
+  guards retained.
+- `Modules/PhoneTrain/Sources/PhoneTrain/PhoneTrainingSession.swift`: public
+  capability types verified against pinned msplat source; only Device adopts it;
+  Sendable streams/values; every underlying actor call awaits.
+- `UITests/HexUITests.swift`: MainActor XCUIApplication actions, existing attachment
+  helpers, predicate expectation and explicit waits; no fixed sleeps.
+- `App/Support/CaptureUploadQueue.swift`: additionally audited because the iOS
+  Observation expansion is excluded on Linux. Fixture injection is Sendable;
+  production secrets are still checked; fixture confirmation completes synchronously
+  through actor awaits and preserves the durable intent boundary.
+
+`App/Support/CaptureStatus.swift` and `App/Support/TrainingExperience.swift` are
+portable and compile under Linux, including new progress math and manifest fields.
+The changed Apple files receive an iOS-target syntax parse; this remains distinct
+from Apple SDK type checking, simulator execution and Metal compilation.
+
+Portable coverage now joins factory → fixture session → PNG/PLY persistence →
+queue storage → confirmed refinement → Ready → both badges, without configured
+services. It also checks fallback progress, old manifest decoding and PNG cleanup.
+The existing fixture pause/resume/cancel tests still run unchanged. The identifier
+audit resolves `TrainingID` constants and includes the new UI test prefixes.
+`testPhoneTrainingRefinesThroughTheFixtureAPIAndPersists` exercises the actual
+screens, declined/confirmed refinement, Phone fallback, badges and result reopen
+in XCUITest; it asserts that in-place is absent. This test has not run on Linux
+and still needs the simulator gate. Native snapshot quality, AR placement and
+thermal behavior still require the real-phone checks above.
+
+### Follow-up commit
+
+**Connect training screens to the shared session and fixture APIs**
+
+File list, relative to `apps/ios`:
+
+- `App/TrainingModel.swift`, `App/TrainingScreen.swift`, `App/CameraActions.swift`
+- `App/HomeScreen.swift`, `App/Support/CaptureStatus.swift`
+- `App/Support/CaptureUploadQueue.swift`, `App/Support/TrainingExperience.swift`
+- `App/Tests/FixtureCaptureAPITests.swift`, `App/Tests/TrainingExperienceTests.swift`
+- `Modules/PhoneTrain/Sources/PhoneTrain/PhoneTrainingSession.swift`
+- `UITests/HexUITests.swift`, `ci_scripts/test_ui_tests.py`, `BUILD_B_REPORT.md`
+
+The follow-up remains uncommitted. No Mac CI dispatch, push, merge or deployment
+was performed. Final full-gate tails are in the delivery message.

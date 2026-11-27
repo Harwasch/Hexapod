@@ -71,6 +71,13 @@ enum TrainingPresentation {
     let fraction: Float = (psnr - 15) / 20
     return Int((max(0, min(1, fraction)) * 100).rounded())
   }
+  static func fraction(step: Int, budget: Int?, elapsed: Double, remaining: Double) -> Double {
+    if let budget, budget > 0 { return min(1, max(0, Double(step) / Double(budget))) }
+    guard elapsed.isFinite, remaining.isFinite, elapsed >= 0, remaining >= 0 else { return 0 }
+    let total = elapsed + remaining
+    guard total.isFinite, total > 0 else { return 0 }
+    return elapsed / total
+  }
   static func eta(_ seconds: Double?) -> String {
     guard let seconds, seconds.isFinite, seconds >= 0 else { return "—" }
     let minutes = Int(ceil(min(seconds, 86_400) / 60))
@@ -109,6 +116,8 @@ struct PhoneSplatRecord: Codable, Sendable {
   let file: String
   let sharpness: Int?
   let checkpoint: String?
+  let previewFile: String?
+  let simulated: Bool?
   static func directory(for capture: LocalCapture) -> URL {
     capture.directory.deletingLastPathComponent().deletingLastPathComponent()
       .appendingPathComponent("PhoneResults/\(capture.id)")
@@ -123,21 +132,34 @@ struct PhoneSplatRecord: Codable, Sendable {
     return record
   }
   func url(for capture: LocalCapture) -> URL { Self.directory(for: capture).appendingPathComponent(file) }
-  static func save(ply: URL, sharpness: Int?, checkpoint: URL?, for capture: LocalCapture) throws -> Self {
+  func previewURL(for capture: LocalCapture) -> URL? {
+    guard let previewFile, previewFile == URL(fileURLWithPath: previewFile).lastPathComponent else { return nil }
+    return Self.directory(for: capture).appendingPathComponent(previewFile)
+  }
+  static func save(ply: URL, sharpness: Int?, checkpoint: URL?, for capture: LocalCapture,
+    previewPNG: Data? = nil, simulated: Bool = false) throws -> Self {
     let directory = directory(for: capture)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let file = "phone-\(UUID().uuidString).ply"
     let destination = directory.appendingPathComponent(file)
     let previous = load(for: capture)
     try FileManager.default.copyItem(at: ply, to: destination)
-    let record = Self(file: file, sharpness: sharpness, checkpoint: checkpoint?.path)
+    var previewFile: String?
+    if previewPNG != nil { previewFile = "preview-\(UUID().uuidString).png" }
+    let record = Self(file: file, sharpness: sharpness, checkpoint: checkpoint?.path,
+      previewFile: previewFile, simulated: simulated)
     do {
+      if let previewPNG, let url = record.previewURL(for: capture) { try previewPNG.write(to: url, options: .atomic) }
       try JSONEncoder().encode(record).write(to: directory.appendingPathComponent("result.json"), options: .atomic)
     } catch {
       try? FileManager.default.removeItem(at: destination)
+      if let url = record.previewURL(for: capture) { try? FileManager.default.removeItem(at: url) }
       throw error
     }
-    if let previous { try? FileManager.default.removeItem(at: previous.url(for: capture)) }
+    if let previous {
+      try? FileManager.default.removeItem(at: previous.url(for: capture))
+      if let url = previous.previewURL(for: capture) { try? FileManager.default.removeItem(at: url) }
+    }
     return record
   }
 }
