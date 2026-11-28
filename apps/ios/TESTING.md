@@ -239,6 +239,16 @@ Release. `App/Support/LaunchMode.swift` reads the arguments once; Release ignore
 them. It supplies the frozen clock, provider selection, capture storage and API seam.
 Without this switch, production rendering, providers and timing retain their behavior.
 
+Screen identifiers must follow `.accessibilityElement(children: .contain)` so SwiftUI
+gives the screen its own accessibility container and preserves child control IDs.
+Run 22 reached the camera but reported `Missing home.record` (or `Missing home.settings`
+in the production-provider probe): its element trees assigned `camera.screen` to the
+Settings, Captures and Start scan buttons. The runner's subsequent restart messages
+did not identify the first failure. The fixture preview also needs a concrete task
+host before its image loads; an empty conditional `Group` cannot start its own image
+load or replay. `test_ui_tests.py` guards both source patterns on Linux; only macOS
+XCUITest can verify the resulting accessibility tree and SwiftUI task lifecycle.
+
 In UI-test mode:
 
 - The camera shows the fixture's first RGB frame, without constructing an ARView or

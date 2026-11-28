@@ -15,7 +15,16 @@ struct TokenProvider {
 }
 
 /// Shared by Settings and background uploads. Pasted tokens stay in the Keychain.
+/// DEBUG UI-test launches use a process-local store because CI simulators are unsigned.
 enum APICredentials {
+  #if DEBUG
+    private static let uiTestTokenStore = makeUITestTokenStore(mode: LaunchMode.current)
+
+    static func makeUITestTokenStore(mode: LaunchMode) -> UITestTokenStore? {
+      mode.isUITest ? UITestTokenStore() : nil
+    }
+  #endif
+
   static var token: String {
     TokenProvider.resolve(
       pasted: writeToken,
@@ -24,6 +33,9 @@ enum APICredentials {
   }
   enum CredentialError: Error { case unavailable, keychain(Int32) }
   static var writeToken: String {
+    #if DEBUG
+      if let uiTestTokenStore { return uiTestTokenStore.writeToken }
+    #endif
     #if canImport(Security)
       var query = item
       query[kSecReturnData as String] = true
@@ -38,6 +50,12 @@ enum APICredentials {
     #endif
   }
   static func setWriteToken(_ value: String) throws {
+    #if DEBUG
+      if let uiTestTokenStore {
+        uiTestTokenStore.setWriteToken(value)
+        return
+      }
+    #endif
     #if canImport(Security)
       let token = value.trimmingCharacters(in: .whitespacesAndNewlines)
       if token.isEmpty {
@@ -71,3 +89,18 @@ enum APICredentials {
     }
   #endif
 }
+
+#if DEBUG
+  /// One instance per UI-test process, shared by Settings and background readers.
+  /// Every access is protected by the lock; nothing is written to disk or Keychain.
+  final class UITestTokenStore: Sendable {
+    private let lock = NSLock()
+    private nonisolated(unsafe) var token = ""
+
+    var writeToken: String { lock.withLock { token } }
+
+    func setWriteToken(_ value: String) {
+      lock.withLock { token = value.trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
+  }
+#endif

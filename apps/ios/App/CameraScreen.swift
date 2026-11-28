@@ -160,6 +160,8 @@ private enum CameraStyle {
       }
     }
     .foregroundStyle(CameraStyle.text)
+    // Give the screen its own AX container instead of overriding every control's ID.
+    .accessibilityElement(children: .contain)
     .accessibilityIdentifier("camera.screen")
     .toolbar(.hidden, for: .navigationBar)
     .sheet(isPresented: $showSites) { CameraSitePicker(model: model) }
@@ -179,7 +181,9 @@ private enum CameraStyle {
   @ViewBuilder private var cameraSurface: some View {
     if LaunchMode.current.isUITest {
       GeometryReader { geometry in
-        Group {
+        // Keep a concrete task host before the asynchronously loaded image exists.
+        ZStack {
+          CameraStyle.background
           if let fixtureBackground {
             Image(uiImage: fixtureBackground).resizable().scaledToFill()
           }
@@ -221,10 +225,10 @@ private enum CameraStyle {
             Circle().fill(CameraStyle.red).frame(width: 9, height: 9)
             Text(CapturePhase.time(model.capturePhase.elapsed(at: date))).monospacedDigit()
           } else if case .stopping = model.capturePhase {
-            ProgressView().tint(CameraStyle.teal)
+            CameraActivityIndicator(tint: CameraStyle.teal)
             Text("Saving")
           } else if case .starting = model.capturePhase {
-            ProgressView().tint(CameraStyle.teal)
+            CameraActivityIndicator(tint: CameraStyle.teal)
             Text("Starting")
           } else {
             Image(systemName: "mappin.and.ellipse").foregroundStyle(CameraStyle.teal)
@@ -274,7 +278,7 @@ private enum CameraStyle {
             if model.recording {
               RoundedRectangle(cornerRadius: 8).fill(CameraStyle.red).frame(width: 32, height: 32)
             } else if model.capturePhase.isBusy {
-              ProgressView().tint(CameraStyle.red)
+              CameraActivityIndicator(tint: CameraStyle.red)
             } else {
               Circle().fill(CameraStyle.red).frame(width: 62, height: 62)
             }
@@ -336,7 +340,7 @@ private enum CameraStyle {
   private var answer: some View {
     HStack(spacing: 12) {
       if model.answering {
-        ProgressView().tint(CameraStyle.amber)
+        CameraActivityIndicator(tint: CameraStyle.amber)
         VStack(alignment: .leading, spacing: 4) {
           Text(model.question).font(.system(size: 15, weight: .medium)).lineLimit(2)
           if model.answerConnecting { Text("Connecting…").font(.caption) }
@@ -580,7 +584,7 @@ private struct ProgressRing: View {
           dismiss()
         }
         .frame(minHeight: 44)
-        if loading { ProgressView().accessibilityLabel("Loading sites") }
+        if loading { CameraActivityIndicator(tint: CameraStyle.teal).accessibilityLabel("Loading sites") }
         if failed { Label("Sites unavailable", systemImage: "wifi.exclamationmark") }
         ForEach(sites) { site in
           Button(site.name) {
@@ -614,6 +618,18 @@ private struct ProgressRing: View {
         do { sites = try await APIGlobeDataSource(baseURL: root).sites() } catch { failed = true }
       }
     }.tint(CameraStyle.amber).presentationDetents([.medium, .large])
+  }
+}
+
+/// Even transient fixture work must not keep XCTest waiting on a spinning animation.
+@MainActor private struct CameraActivityIndicator: View {
+  let tint: Color
+  var body: some View {
+    if LaunchMode.current.isUITest {
+      Image(systemName: "hourglass").foregroundStyle(tint)
+    } else {
+      ProgressView().tint(tint)
+    }
   }
 }
 

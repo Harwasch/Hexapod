@@ -268,12 +268,13 @@ private struct CaptureQualityBadge: View {
     .background(HexStyle.background).foregroundStyle(HexStyle.text)
     .navigationTitle("Scan").navigationBarTitleDisplayMode(.inline)
     .toolbar(.visible, for: .navigationBar)
+    .accessibilityElement(children: .contain)
     .accessibilityIdentifier("capture.detail")
     .fullScreenCover(isPresented: $training) {
       TrainingScreen(capture: capture.local, registry: registry) { training = false }
     }
-    .confirmationDialog(
-      "Refine in cloud?", isPresented: $refineConfirmation, titleVisibility: .visible
+    .alert(
+      "Refine in cloud?", isPresented: $refineConfirmation
     ) {
       Button("Refine in cloud") {
         refining = true
@@ -495,7 +496,9 @@ private struct CaptureRow: Identifiable, Sendable {
           }
       }
     }
-    .background(HexStyle.background).accessibilityIdentifier("globe.screen")
+    .background(HexStyle.background)
+    .accessibilityElement(children: .contain)
+    .accessibilityIdentifier("globe.screen")
     .navigationBarBackButtonHidden()
     .toolbar(.hidden, for: .navigationBar)
   }
@@ -570,7 +573,9 @@ private struct CaptureRow: Identifiable, Sendable {
       }
     }
     .scrollContentBackground(.hidden).background(HexStyle.background)
-    .navigationTitle("Settings").accessibilityIdentifier("settings.screen")
+    .navigationTitle("Settings")
+    .accessibilityElement(children: .contain)
+    .accessibilityIdentifier("settings.screen")
     .navigationBarBackButtonHidden(LaunchMode.current.isUITest)
     .toolbar {
       if LaunchMode.current.isUITest {
