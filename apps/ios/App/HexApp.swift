@@ -8,8 +8,7 @@ struct HexApp: App {
   @Environment(\.scenePhase) private var scenePhase
   init() {
     if LaunchMode.current.isUITest {
-      // UIKit needs its presentation animations to open the globe's Menu.
-      // The SwiftUI transaction below still quiets fixture view transitions.
+      // Keep UIKit presentations working; quiet SwiftUI transitions below.
       do { try LaunchMode.current.prepareCaptureStorage() } catch {
         assertionFailure("Could not reset UI-test capture storage")
       }

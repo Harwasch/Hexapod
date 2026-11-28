@@ -63,7 +63,7 @@
               .aspectRatio(previewAspect, contentMode: .fit)
               .ignoresSafeArea().opacity(showCloud ? 0 : 1)
               .scaleEffect(model.experience.stage == .settling ? 1.025 : 1)
-              .animation(.easeOut(duration: 0.6), value: model.experience.stage)
+              .animation(LaunchMode.current.isUITest ? nil : .easeOut(duration: 0.6), value: model.experience.stage)
               .accessibilityHidden(showCloud)
               .accessibilityIdentifier(TrainingID.orbit)
               .accessibilityLabel(model.previewImage == nil ? "Splat. Drag to orbit, pinch to zoom, double tap to focus." : "Phone preview")
@@ -96,8 +96,8 @@
             else { trainingControls }
           }.padding(24)
         }
-        .animation(.easeInOut(duration: 0.7), value: selection.source)
-        .animation(.easeInOut(duration: 0.4), value: model.inPlace)
+        .animation(LaunchMode.current.isUITest ? nil : .easeInOut(duration: 0.7), value: selection.source)
+        .animation(LaunchMode.current.isUITest ? nil : .easeInOut(duration: 0.4), value: model.inPlace)
         .task {
           await model.loadExisting()
           if LaunchMode.current.isUITest { return }
@@ -140,7 +140,7 @@
       .sheet(isPresented: $showSettings) {
         if let registry { NavigationStack { SettingsScreen(registry: registry) } }
       }
-      .confirmationDialog("Refine in cloud?", isPresented: $refineConfirmation, titleVisibility: .visible) {
+      .alert("Refine in cloud?", isPresented: $refineConfirmation) {
         Button("Refine in cloud") { Task { await refine() } }
           .accessibilityIdentifier(TrainingID.confirm)
         Button("Cancel", role: .cancel) {}.accessibilityIdentifier(TrainingID.decline)
@@ -161,7 +161,7 @@
         }
         Button { close() } label: {
           Group {
-            if closing { ProgressView() } else { Image(systemName: "xmark") }
+            if closing && !LaunchMode.current.isUITest { ProgressView() } else { Image(systemName: "xmark") }
           }.frame(width: 48, height: 48)
             .background(.ultraThinMaterial, in: Circle())
         }.accessibilityLabel(model.experience.stage.busy ? "Cancel training" : "Close")

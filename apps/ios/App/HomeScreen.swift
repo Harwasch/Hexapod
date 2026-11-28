@@ -273,8 +273,8 @@ private struct CaptureQualityBadge: View {
     .fullScreenCover(isPresented: $training) {
       TrainingScreen(capture: capture.local, registry: registry) { training = false }
     }
-    .confirmationDialog(
-      "Refine in cloud?", isPresented: $refineConfirmation, titleVisibility: .visible
+    .alert(
+      "Refine in cloud?", isPresented: $refineConfirmation
     ) {
       Button("Refine in cloud") {
         refining = true
