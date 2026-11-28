@@ -58,6 +58,19 @@ import XCTest
     element.tap()
     screenshot(shot)
   }
+  /// SwiftUI may not pass `.accessibilityIdentifier` through to `.alert` buttons, so
+  /// find the button inside the presented alert by identifier, falling back to its title.
+  private func tapAlertButton(_ id: String, label: String, shot: String,
+    file: StaticString = #filePath, line: UInt = #line) {
+    let alert = app.alerts.firstMatch
+    XCTAssertTrue(alert.waitForExistence(timeout: 30), "Missing alert for \(id)",
+      file: file, line: line)
+    let byID = alert.buttons[id].firstMatch
+    let button = byID.exists ? byID : alert.buttons[label].firstMatch
+    waitUntilReady(button, file: file, line: line)
+    button.tap()
+    screenshot(shot)
+  }
   private func waitFor(_ predicate: NSPredicate, on element: XCUIElement,
     timeout: TimeInterval = 30, file: StaticString = #filePath, line: UInt = #line) {
     let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
@@ -135,11 +148,11 @@ import XCTest
     XCTAssertTrue(status.label.contains("Stored in cloud"))
     screenshot("Phone result")
     tap("refine.start", shot: "Refine cost confirmation")
-    tap("refine.cancel", shot: "Refinement declined")
+    tapAlertButton("refine.cancel", label: "Cancel", shot: "Refinement declined")
     waitUntilReady(app.buttons["refine.start"])
     XCTAssertTrue(status.label.contains("Stored in cloud"))
     tap("refine.start", shot: "Refine confirmed cost")
-    tap("refine.confirm", shot: "Refinement requested")
+    tapAlertButton("refine.confirm", label: "Refine in cloud", shot: "Refinement requested")
     let ready = NSPredicate(format: "label CONTAINS %@", "Ready")
     waitFor(ready, on: status, timeout: 60)
     waitFor(NSPredicate(format: "selected == true"), on: app.buttons["result.cloud"])
@@ -149,8 +162,8 @@ import XCTest
     tap("result.close", shot: "Result closed")
     tap("upload.done", shot: "Capture finished")
     tap("home.captures", shot: "Trained capture list")
-    visible("captures.badge.phone")
-    visible("captures.badge.cloud")
+    visible("captures.badge.phone", timeout: 45)
+    visible("captures.badge.cloud", timeout: 45)
     screenshot("Both quality badges")
     app.terminate()
     launch("yard-small", resetCaptures: false)
