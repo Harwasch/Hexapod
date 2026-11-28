@@ -19,7 +19,7 @@ from .ledger import STARTUP_SECONDS
 from .live_sync import watching
 from .recipe import make_recipe, patch_seed
 from .results import parse_result
-from .scene import prepare_pool, read_json, verify, write_json
+from .scene import evaluation_subset, frame_selection, prepare_pool, read_json, verify, write_json
 
 ARTIFACTS = (
     "train_metrics.json",
@@ -117,6 +117,15 @@ def run_training(
             scene = snapshot
             split_digest, manifest_digest = split["digest"], manifest["digest"]
             prepare_pool(scene, work.inputs_dir, split)
+            write_json(
+                destination / "frame_selection.json",
+                frame_selection(split, int(params.get("test_every", 0))),
+            )
+            evaluation_split = scene / "split.json"
+            if plan.get("evaluationTestNames") is not None:
+                subset = evaluation_subset(split, plan["evaluationTestNames"])
+                evaluation_split = Path(temporary) / "evaluation_split.json"
+                write_json(evaluation_split, subset)
             if plan.get("rehearsal"):
                 params.update(rehearsal.stand_in_params())
                 gpu_name = "CPU rehearsal (no GPU)"
@@ -149,7 +158,19 @@ def run_training(
                 and not filecmp.cmp(raw, shipped, shallow=False)
             ):
                 shutil.copyfile(raw, destination / "full_sh.ply")
-            if plan.get("rehearsal"):
+            if plan.get("calibrationEvaluationOnly"):
+                # Research-only caller immediately evaluates the retained model through
+                # coverage_quality's lazy held-out reader. Avoid a second all-camera Parser.
+                write_json(
+                    destination / "test.json",
+                    {
+                        "status": "deferred",
+                        "frames": 0,
+                        "perFrame": [],
+                        "reason": "held-out pixel evaluation deferred to coverage_quality",
+                    },
+                )
+            elif plan.get("rehearsal"):
                 test = rehearsal.evaluation(split["test"])
                 write_json(destination / "test.json", test)
             else:
@@ -170,7 +191,7 @@ def run_training(
                     "--trainer",
                     str(training.trainer_script(params.get("trainer"))),
                     "--split",
-                    str(scene / "split.json"),
+                    str(evaluation_split),
                     "--scene",
                     str(scene),
                     "--out",

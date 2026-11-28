@@ -1,0 +1,77 @@
+{
+  "error": {
+    "cone_deg": 10,
+    "sharpness": 4,
+    "views_to_fill": 4,
+    "coefficients": [0.026167885067756146, 0.04447047173840831],
+    "r2": 0.08328378339105558,
+    "leave_view_out_r2": 0.0792457950235611,
+    "resolution_target_mm_px": null,
+    "parallax_gate_deg": null,
+    "status": "exploratory",
+    "rows": 5387,
+    "test_views": 91,
+    "spatial_patches": 4382,
+    "target": "error",
+    "scene_names": ["c935"],
+    "scene_intercepts": false,
+    "angle_baseline": {
+      "intercept": 0.04374935434352074,
+      "slope_per_deg": 0.0001409095332601308,
+      "r2": 0.026488998918499096,
+      "leave_view_out_r2": 0.022086125247199884
+    },
+    "grid_boundary": true,
+    "caution": "Exploratory grid CV; adjacent patches/views correlated. Validate on new scans."
+  },
+  "l1": {
+    "cone_deg": 10,
+    "sharpness": 4,
+    "views_to_fill": 4,
+    "coefficients": [0.01627288073339432, 0.02498478019312567],
+    "r2": 0.06334256618658352,
+    "leave_view_out_r2": 0.06002081726080799,
+    "resolution_target_mm_px": null,
+    "parallax_gate_deg": null,
+    "status": "exploratory",
+    "rows": 5387,
+    "test_views": 91,
+    "spatial_patches": 4382,
+    "target": "l1",
+    "scene_names": ["c935"],
+    "scene_intercepts": false,
+    "angle_baseline": {
+      "intercept": 0.02620785927763734,
+      "slope_per_deg": 7.827456059155922e-5,
+      "r2": 0.019944715949633207,
+      "leave_view_out_r2": 0.016247004510381635
+    },
+    "grid_boundary": true,
+    "caution": "Exploratory grid CV; adjacent patches/views correlated. Validate on new scans."
+  },
+  "lpips": {
+    "cone_deg": 10,
+    "sharpness": 4,
+    "views_to_fill": 4,
+    "coefficients": [0.015404666207665008, 0.020690475743059527],
+    "r2": 0.05696179282674296,
+    "leave_view_out_r2": 0.05353202020711301,
+    "resolution_target_mm_px": null,
+    "parallax_gate_deg": null,
+    "status": "exploratory",
+    "rows": 5387,
+    "test_views": 91,
+    "spatial_patches": 4382,
+    "target": "lpips",
+    "scene_names": ["c935"],
+    "scene_intercepts": false,
+    "angle_baseline": {
+      "intercept": 0.02330121594339925,
+      "slope_per_deg": 6.998203824677494e-5,
+      "r2": 0.019372021352817792,
+      "leave_view_out_r2": 0.01563531126620543
+    },
+    "grid_boundary": true,
+    "caution": "Exploratory grid CV; adjacent patches/views correlated. Validate on new scans."
+  }
+}
